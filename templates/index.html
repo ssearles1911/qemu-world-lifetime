@@ -25,6 +25,13 @@
     border: 1px solid rgba(127,127,127,0.5);
     background: inherit; color: inherit;
   }
+  /* Native <option> ignores inherited colors and falls back to its own
+     defaults, which clash with dark mode. Canvas/CanvasText follow the
+     OS theme and keep dropdown entries readable in both modes. */
+  form select, form select option {
+    background-color: Canvas;
+    color: CanvasText;
+  }
   form button, form a.btn { cursor: pointer; }
   form a.btn { text-decoration: none; display: inline-block; }
   .meta {
