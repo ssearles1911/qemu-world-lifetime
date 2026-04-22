@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>QEMU Lifetime Report{% if domain %} — {{ domain.name }}{% endif %}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 1.5rem;
+    max-width: 1500px;
+  }
+  h1 { margin-top: 0; font-size: 1.4rem; }
+  form {
+    display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap;
+    padding: 1rem; border-radius: 8px;
+    background: rgba(127,127,127,0.08);
+    margin-bottom: 1.25rem;
+  }
+  form label {
+    display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem;
+  }
+  form select, form input[type=number], form button, form a.btn {
+    padding: 0.45rem 0.65rem; font-size: 0.95rem; border-radius: 4px;
+    border: 1px solid rgba(127,127,127,0.5);
+    background: inherit; color: inherit;
+  }
+  form button, form a.btn { cursor: pointer; }
+  form a.btn { text-decoration: none; display: inline-block; }
+  .meta {
+    color: rgba(127,127,127,1); font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+  }
+  .meta small { font-size: 0.78rem; }
+  .project { margin: 1.4rem 0; }
+  .project h2 {
+    font-size: 1.05rem; margin: 0 0 0.4rem 0;
+    border-bottom: 1px solid rgba(127,127,127,0.3); padding-bottom: 0.3rem;
+  }
+  .project h2 .count {
+    color: rgba(127,127,127,0.85); font-weight: normal; font-size: 0.85rem;
+    margin-left: 0.4rem;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  th, td {
+    text-align: left; padding: 0.35rem 0.55rem;
+    border-bottom: 1px solid rgba(127,127,127,0.2);
+    vertical-align: top;
+  }
+  th { background: rgba(127,127,127,0.12); }
+  tr:hover td { background: rgba(127,127,127,0.07); }
+  .uuid {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.75rem; color: rgba(127,127,127,0.85);
+  }
+  .empty {
+    color: rgba(127,127,127,0.8); font-style: italic; padding: 0.5rem 0;
+  }
+  .error {
+    color: #b00020; padding: 0.75rem; border: 1px solid #b00020;
+    border-radius: 4px; margin-bottom: 1rem;
+  }
+  .nowrap { white-space: nowrap; }
+</style>
+</head>
+<body>
+  <h1>QEMU Lifetime Report</h1>
+
+  <form method="get" action="/">
+    <label>Domain
+      <select name="domain" required>
+        <option value="">— select —</option>
+        {% for d in domains %}
+          <option value="{{ d.id }}" {% if selected_domain == d.id %}selected{% endif %}>
+            {{ d.name }} ({{ d.project_count }} project{{ '' if d.project_count == 1 else 's' }})
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Min days since last event
+      <input type="number" name="days" min="0" value="{{ days }}" placeholder="any">
+    </label>
+    <button type="submit">Run report</button>
+    {% if domain %}
+      <a class="btn"
+         href="/export.xlsx?domain={{ selected_domain|urlencode }}{% if days != '' %}&amp;days={{ days }}{% endif %}">
+        Download Excel
+      </a>
+    {% endif %}
+  </form>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% if domain %}
+    <div class="meta">
+      <strong>Domain:</strong> {{ domain.name }}
+      &nbsp;·&nbsp; <strong>Projects:</strong> {{ projects|length }}
+      &nbsp;·&nbsp; <strong>Instances reported:</strong> {{ total }}
+      {% if days != '' %}
+        &nbsp;·&nbsp; <strong>Filter:</strong> no lifecycle event in last {{ days }} day(s)
+      {% endif %}
+      <br>
+      <small>Lifecycle actions tracked: {{ lifecycle_actions|join(', ') }}</small>
+    </div>
+
+    {% for proj in projects %}
+      {% set proj_rows = rows_by_project.get(proj.id, []) %}
+      {% if not (days != '' and proj_rows|length == 0) %}
+        <section class="project">
+          <h2>
+            {{ proj.name }}
+            <span class="count">({{ proj_rows|length }} instance{{ '' if proj_rows|length == 1 else 's' }})</span>
+          </h2>
+          {% if proj_rows %}
+            <table>
+              <thead>
+                <tr>
+                  <th>Instance</th>
+                  <th>Host</th>
+                  <th>State</th>
+                  <th>Last action</th>
+                  <th>Last action time (UTC)</th>
+                  <th>Age</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in proj_rows %}
+                  <tr>
+                    <td>
+                      <div>{{ r.name or '-' }}</div>
+                      <div class="uuid">{{ r.uuid }}</div>
+                    </td>
+                    <td>{{ r.compute_host or '-' }}</td>
+                    <td>{{ r.vm_state or '-' }}</td>
+                    <td>{{ r.last_action }}</td>
+                    <td class="nowrap">{{ r.last_action_time or '-' }}</td>
+                    <td class="nowrap">{{ r.age }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="empty">No instances.</div>
+          {% endif %}
+        </section>
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+</body>
+</html>
