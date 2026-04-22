@@ -56,7 +56,26 @@ All config is via environment variables.
 | `QLR_HOST`       | `127.0.0.1`   | `web.py` bind host                                          |
 | `QLR_PORT`       | `8000`        | `web.py` bind port                                          |
 
-Example:
+### `.env` file (recommended)
+
+The CLI and web app auto-load a `.env` file from the current working
+directory (via `python-dotenv`), so you don't have to export variables
+each session. Copy the template and edit:
+
+```
+cp .env.example .env
+$EDITOR .env
+```
+
+`.env` is gitignored. Real environment variables still take precedence
+over `.env` entries, so you can override individual values for a single
+run:
+
+```
+OS_DB_HOST=other-replica.internal python qemu_lifetime_report.py --list-domains
+```
+
+### Or export manually
 
 ```
 export OS_DB_HOST=mariadb-replica.internal

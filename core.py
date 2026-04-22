@@ -4,7 +4,7 @@ Used by both the CLI (`qemu_lifetime_report.py`) and the web UI (`web.py`).
 All OpenStack DBs (keystone, nova_api, nova_cell*) are expected to live on
 one MariaDB replica reachable with a single set of credentials.
 
-Config (env vars):
+Config (env vars; auto-loaded from `.env` in the CWD if present):
     OS_DB_HOST       (default 127.0.0.1)
     OS_DB_PORT       (default 3306)
     OS_DB_USER       (default nova)
@@ -20,6 +20,14 @@ from urllib.parse import urlparse
 
 import pymysql
 import pymysql.cursors
+
+# Load .env from CWD (or any parent) before any os.environ.get() runs.
+# Real env vars take precedence over .env entries.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 # Nova action names that count as a QEMU lifecycle event for this report.
