@@ -14,9 +14,11 @@ from .base import Report
 
 # --- Report imports ---------------------------------------------------------
 # The CLI and web UI enumerate reports in the order they appear in `_ORDER`.
+from . import instance_leaderboard  # noqa: F401
+from . import project_growth  # noqa: F401
 from . import qemu_lifetime  # noqa: F401
 
-_ORDER = [qemu_lifetime]
+_ORDER = [qemu_lifetime, instance_leaderboard, project_growth]
 
 
 def all_reports() -> List[Report]:
