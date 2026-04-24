@@ -153,3 +153,15 @@ def keystone_db() -> str:
 
 def nova_api_db() -> str:
     return _env("NOVA_API_DB", "nova_api") or "nova_api"
+
+
+def cinder_db() -> str:
+    return _env("CINDER_DB", "cinder") or "cinder"
+
+
+def glance_db() -> str:
+    return _env("GLANCE_DB", "glance") or "glance"
+
+
+def neutron_db() -> str:
+    return _env("NEUTRON_DB", "neutron") or "neutron"
