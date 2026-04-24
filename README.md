@@ -89,8 +89,14 @@ export OS_DB_PASSWORD=secret
 # interactive — prompts for domain, then for the min-days filter
 python qemu_lifetime_report.py
 
-# fully non-interactive
+# fully non-interactive (defaults to vm_state=active)
 python qemu_lifetime_report.py --domain heroes --days 80
+
+# include specific non-active states
+python qemu_lifetime_report.py --domain heroes --state active --state stopped
+
+# disable the state filter entirely
+python qemu_lifetime_report.py --domain heroes --all-states
 
 # helpers
 python qemu_lifetime_report.py --list-domains
@@ -101,10 +107,15 @@ python qemu_lifetime_report.py --help
 Output is grouped by project under the selected domain, sorted oldest-first
 within each project so long-idle VMs surface at the top.
 
-With `--days N`, only instances whose most-recent lifecycle action is older
-than `N` days are shown. Instances with *no* recorded lifecycle action are
-included and anchored to `instances.created_at` (so a never-touched VM still
-shows up under any `--days` filter — which is usually what you want).
+**State filter:** by default only instances in `vm_state=active` are
+reported — the operational use case is running VMs. Use `--state` (repeatable)
+to pick other states, or `--all-states` to see everything.
+
+**Days filter:** with `--days N`, only instances whose most-recent lifecycle
+action is older than `N` days are shown. Instances with *no* recorded
+lifecycle action are included and anchored to `instances.created_at` (so a
+never-touched VM still shows up under any `--days` filter — usually what
+you want).
 
 ## Web usage
 
@@ -113,11 +124,13 @@ python web.py
 # → http://127.0.0.1:8000/
 ```
 
-Pick a domain, optionally set a minimum-days filter, click **Run report**.
-The report renders grouped by project; click **Download Excel** to fetch the
-same query as an `.xlsx` with:
+Pick a domain, pick a state (defaults to `active`; pick *— all states —* to
+turn the filter off), optionally set a minimum-days filter, click **Run
+report**. The report renders grouped by project; click **Download Excel**
+to fetch the same query as an `.xlsx` with:
 
-- Metadata header (domain, filter, action set, generated-at timestamp).
+- Metadata header (domain, state filter, days filter, action set,
+  generated-at timestamp).
 - Frozen table header row and auto-filter on every column.
 - A numeric `age_days` column alongside the human-readable `age`, so Excel
   can sort/filter properly.

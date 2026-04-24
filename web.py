@@ -31,6 +31,9 @@ import core
 app = Flask(__name__)
 
 
+ALL_STATES_SENTINEL = "__all__"
+
+
 def _parse_days(raw: Optional[str]) -> Optional[int]:
     if raw is None or raw == "":
         return None
@@ -41,17 +44,38 @@ def _parse_days(raw: Optional[str]) -> Optional[int]:
         return None
 
 
+def _parse_state(raw: Optional[str]) -> (Optional[List[str]], str):
+    """Resolve the `state` query arg into (vm_states, selected_state).
+
+    `vm_states` is what core.collect_report() expects: None means "any
+    state", a list means "filter to these". `selected_state` is what
+    the dropdown should show as picked (the sentinel or a state name).
+
+    If no `state` param is sent (first visit / direct link), default to
+    'active' — matches the project convention.
+    """
+    if raw is None:
+        return list(core.DEFAULT_VM_STATES), core.DEFAULT_VM_STATES[0]
+    if raw == ALL_STATES_SENTINEL or raw == "":
+        return None, ALL_STATES_SENTINEL
+    return [raw], raw
+
+
 @app.route("/")
 def index():
     domains = core.list_domains()
     domain_sel = request.args.get("domain", "").strip()
     days = _parse_days(request.args.get("days"))
+    vm_states, selected_state = _parse_state(request.args.get("state"))
 
     context: Dict[str, Any] = {
         "domains": domains,
         "selected_domain": domain_sel,
         "days": "" if days is None else days,
         "lifecycle_actions": core.LIFECYCLE_ACTIONS,
+        "common_vm_states": core.COMMON_VM_STATES,
+        "selected_state": selected_state,
+        "all_states_sentinel": ALL_STATES_SENTINEL,
         "domain": None,
         "projects": [],
         "rows_by_project": {},
@@ -60,7 +84,7 @@ def index():
     }
 
     if domain_sel:
-        report = core.collect_report(domain_sel, days)
+        report = core.collect_report(domain_sel, days, vm_states)
         if report["domain"] is None:
             context["error"] = f"Domain not found: {domain_sel}"
         else:
@@ -81,14 +105,21 @@ def export_xlsx():
     if not domain_sel:
         abort(400, "Missing 'domain' parameter")
     days = _parse_days(request.args.get("days"))
+    vm_states, selected_state = _parse_state(request.args.get("state"))
 
-    report = core.collect_report(domain_sel, days)
+    report = core.collect_report(domain_sel, days, vm_states)
     if report["domain"] is None:
         abort(404, f"Domain not found: {domain_sel}")
 
-    bio = _build_workbook(report["domain"], report["projects"], report["rows"], days)
+    bio = _build_workbook(
+        report["domain"], report["projects"], report["rows"], days, vm_states,
+    )
 
     bits = [report["domain"]["name"], "qemu-lifetime"]
+    if vm_states:
+        bits.append("-".join(vm_states))
+    else:
+        bits.append("all-states")
     if days is not None:
         bits.append(f"{days}d")
     filename = "-".join(bits) + ".xlsx"
@@ -106,6 +137,7 @@ def _build_workbook(
     projects: List[Dict[str, Any]],
     rows: List[Dict[str, Any]],
     days: Optional[int],
+    vm_states: Optional[List[str]],
 ) -> io.BytesIO:
     wb = Workbook()
     ws = wb.active
@@ -114,8 +146,10 @@ def _build_workbook(
     # Top-of-sheet metadata block (above the headered table).
     ws.append([f"Domain: {domain['name']}"])
     ws.append([f"Domain ID: {domain['id']}"])
+    state_desc = ", ".join(vm_states) if vm_states else "(all states)"
+    ws.append([f"State filter: {state_desc}"])
     if days is not None:
-        ws.append([f"Filter: no lifecycle event in last {days} day(s)"])
+        ws.append([f"Days filter: no lifecycle event in last {days} day(s)"])
     ws.append([f"Lifecycle actions: {', '.join(core.LIFECYCLE_ACTIONS)}"])
     ws.append([f"Generated: {datetime.utcnow().isoformat(timespec='seconds')}Z"])
     ws.append([])

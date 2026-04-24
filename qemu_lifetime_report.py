@@ -5,6 +5,9 @@ Lists Keystone domains, lets you pick one (or pass --domain), then prints
 every instance in that domain's projects along with its most recent
 lifecycle action and how long ago it occurred.
 
+By default only instances in vm_state=active are reported. Use --state
+(repeatable) to pick other states, or --all-states to disable filtering.
+
 Optionally filters with --days to surface instances with no qualifying
 event in the last N days.
 
@@ -56,6 +59,7 @@ def render_grouped(
     projects: List[Dict[str, Any]],
     rows: List[Dict[str, Any]],
     days_filter: Optional[int],
+    state_filter: Optional[List[str]],
 ) -> str:
     cols = [
         ("uuid", "uuid", 36),
@@ -72,8 +76,12 @@ def render_grouped(
         by_project[r["project_id"]].append(r)
 
     out: List[str] = [f"Domain: {domain['name']}  (id: {domain['id']})"]
+    if state_filter:
+        out.append(f"State filter: {', '.join(state_filter)}")
+    else:
+        out.append("State filter: (all states)")
     if days_filter is not None:
-        out.append(f"Filter: no lifecycle event in the last {days_filter} day(s)")
+        out.append(f"Days filter: no lifecycle event in the last {days_filter} day(s)")
     out.append("")
 
     total = 0
@@ -109,6 +117,11 @@ def main() -> int:
     p.add_argument("--domain", help="Domain name or id (skips interactive prompt)")
     p.add_argument("--days", type=int,
                    help="Only show instances with no lifecycle event in the last N days")
+    p.add_argument("--state", action="append", metavar="STATE",
+                   help=("Filter by vm_state. Repeatable; default is just 'active'. "
+                         "Use --all-states to disable filtering."))
+    p.add_argument("--all-states", action="store_true",
+                   help="Show instances in any vm_state (overrides --state)")
     p.add_argument("--list-domains", action="store_true",
                    help="List domains and exit")
     p.add_argument("--list-cells", action="store_true",
@@ -139,6 +152,13 @@ def main() -> int:
             prompt_days() if sys.stdin.isatty() and not args.domain else None
         )
 
+        if args.all_states:
+            vm_states: Optional[List[str]] = None
+        elif args.state:
+            vm_states = list(args.state)
+        else:
+            vm_states = list(core.DEFAULT_VM_STATES)
+
         projects = core.list_projects(domain["id"])
         if not projects:
             print(f"Domain {domain['name']} has no enabled projects.")
@@ -147,9 +167,9 @@ def main() -> int:
         project_ids = [p["id"] for p in projects]
         rows: List[Dict[str, Any]] = []
         for cell in core.list_cell_dbs():
-            rows.extend(core.fetch_instances(cell, project_ids, days))
+            rows.extend(core.fetch_instances(cell, project_ids, days, vm_states))
         core.annotate_ages(rows)
-        print(render_grouped(domain, projects, rows, days))
+        print(render_grouped(domain, projects, rows, days, vm_states))
         return 0
 
     except pymysql.MySQLError as exc:

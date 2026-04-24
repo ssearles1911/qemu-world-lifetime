@@ -84,13 +84,23 @@
         {% endfor %}
       </select>
     </label>
+    <label>State
+      <select name="state">
+        {% for s in common_vm_states %}
+          <option value="{{ s }}" {% if selected_state == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+        <option value="{{ all_states_sentinel }}" {% if selected_state == all_states_sentinel %}selected{% endif %}>
+          — all states —
+        </option>
+      </select>
+    </label>
     <label>Min days since last event
       <input type="number" name="days" min="0" value="{{ days }}" placeholder="any">
     </label>
     <button type="submit">Run report</button>
     {% if domain %}
       <a class="btn"
-         href="/export.xlsx?domain={{ selected_domain|urlencode }}{% if days != '' %}&amp;days={{ days }}{% endif %}">
+         href="/export.xlsx?domain={{ selected_domain|urlencode }}&amp;state={{ selected_state|urlencode }}{% if days != '' %}&amp;days={{ days }}{% endif %}">
         Download Excel
       </a>
     {% endif %}
@@ -105,8 +115,10 @@
       <strong>Domain:</strong> {{ domain.name }}
       &nbsp;·&nbsp; <strong>Projects:</strong> {{ projects|length }}
       &nbsp;·&nbsp; <strong>Instances reported:</strong> {{ total }}
+      &nbsp;·&nbsp; <strong>State:</strong>
+      {% if selected_state == all_states_sentinel %}(all){% else %}{{ selected_state }}{% endif %}
       {% if days != '' %}
-        &nbsp;·&nbsp; <strong>Filter:</strong> no lifecycle event in last {{ days }} day(s)
+        &nbsp;·&nbsp; <strong>Days:</strong> no event in last {{ days }} day(s)
       {% endif %}
       <br>
       <small>Lifecycle actions tracked: {{ lifecycle_actions|join(', ') }}</small>

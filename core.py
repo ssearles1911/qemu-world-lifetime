@@ -42,6 +42,27 @@ LIFECYCLE_ACTIONS: Tuple[str, ...] = (
 )
 
 
+# Common Nova `instances.vm_state` values, in roughly the order users
+# care about them. The web UI exposes these as the state-filter options.
+COMMON_VM_STATES: Tuple[str, ...] = (
+    "active",
+    "stopped",
+    "paused",
+    "suspended",
+    "shelved",
+    "shelved_offloaded",
+    "error",
+    "building",
+    "rescued",
+    "resized",
+    "soft-deleted",
+)
+
+# Default state filter applied when the caller doesn't specify one:
+# the operational interest is in *running* instances.
+DEFAULT_VM_STATES: Tuple[str, ...] = ("active",)
+
+
 def db_params(database: Optional[str] = None) -> Dict[str, Any]:
     return {
         "host": os.environ.get("OS_DB_HOST", "127.0.0.1"),
@@ -129,10 +150,15 @@ def fetch_instances(
     cell_db: str,
     project_ids: Sequence[str],
     days: Optional[int],
+    vm_states: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Active instances in the given projects with their most-recent
     lifecycle action, scoped to one cell DB. Cross-DB join into keystone
     for project name (all DBs live on the same MariaDB server).
+
+    `vm_states` filters by `instances.vm_state`. None or empty means
+    no state filter (return instances in any state). Pass an explicit
+    sequence (e.g. `("active",)`) to restrict.
     """
     if not project_ids:
         return []
@@ -181,6 +207,11 @@ def fetch_instances(
 
     args: List[Any] = list(project_ids) + list(LIFECYCLE_ACTIONS) + list(project_ids)
 
+    if vm_states:
+        state_ph = ",".join(["%s"] * len(vm_states))
+        sql += f" AND i.vm_state IN ({state_ph})"
+        args.extend(vm_states)
+
     if days is not None:
         sql += " AND COALESCE(r.start_time, i.created_at) < (UTC_TIMESTAMP() - INTERVAL %s DAY)"
         args.append(days)
@@ -219,12 +250,19 @@ def annotate_ages(rows: Iterable[Dict[str, Any]]) -> None:
             r["last_action"] = "(none recorded)"
 
 
-def collect_report(domain_selector: str, days: Optional[int]) -> Dict[str, Any]:
+def collect_report(
+    domain_selector: str,
+    days: Optional[int],
+    vm_states: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     """Resolve a domain by name/id, then fetch + annotate every instance
     in its projects across all cells. Returns a dict with keys:
         domain    — dict or None if not found
         projects  — list of project dicts (sorted by name)
         rows      — list of instance dicts (annotated with age)
+
+    `vm_states` filters by `instances.vm_state`. None/empty disables the
+    filter; callers wanting "active only" should pass DEFAULT_VM_STATES.
     """
     domain = find_domain(domain_selector)
     if domain is None:
@@ -233,6 +271,6 @@ def collect_report(domain_selector: str, days: Optional[int]) -> Dict[str, Any]:
     project_ids = [p["id"] for p in projects]
     rows: List[Dict[str, Any]] = []
     for cell in list_cell_dbs():
-        rows.extend(fetch_instances(cell, project_ids, days))
+        rows.extend(fetch_instances(cell, project_ids, days, vm_states))
     annotate_ages(rows)
     return {"domain": domain, "projects": projects, "rows": rows}
