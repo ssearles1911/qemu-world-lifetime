@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Reports — OpenStack Ops BI{% endblock %}
+{% block content %}
+<h1>Reports</h1>
+<p class="meta">Pick a report to run.</p>
+{% for r in reports %}
+  <a class="report-card" href="{{ url_for('run_report', report_id=r.id) }}">
+    <h3>{{ r.name }}</h3>
+    <p>{{ r.description }}</p>
+  </a>
+{% endfor %}
+{% endblock %}

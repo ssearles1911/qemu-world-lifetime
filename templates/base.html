@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}OpenStack Ops BI{% endblock %}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 1.5rem;
+    max-width: 1600px;
+  }
+  h1 { margin-top: 0; font-size: 1.4rem; }
+  h2 {
+    font-size: 1.05rem; margin: 0 0 0.4rem 0;
+    border-bottom: 1px solid rgba(127,127,127,0.3); padding-bottom: 0.3rem;
+  }
+  nav {
+    margin-bottom: 1rem; font-size: 0.85rem;
+    color: rgba(127,127,127,1);
+  }
+  nav a { color: inherit; text-decoration: none; margin-right: 0.75rem; }
+  nav a.active { font-weight: 600; color: CanvasText; }
+  form {
+    display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap;
+    padding: 1rem; border-radius: 8px;
+    background: rgba(127,127,127,0.08);
+    margin-bottom: 1.25rem;
+  }
+  form label.field {
+    display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem;
+  }
+  form select, form input[type=number], form input[type=text], form input[type=date],
+  form button, form a.btn {
+    padding: 0.45rem 0.65rem; font-size: 0.95rem; border-radius: 4px;
+    border: 1px solid rgba(127,127,127,0.5);
+    background: inherit; color: inherit;
+  }
+  form select, form select option {
+    background-color: Canvas;
+    color: CanvasText;
+  }
+  form button, form a.btn { cursor: pointer; }
+  form a.btn { text-decoration: none; display: inline-block; }
+  form fieldset.multiselect {
+    margin: 0; padding: 0.35rem 0.6rem; border-radius: 4px;
+    border: 1px solid rgba(127,127,127,0.5);
+    display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;
+  }
+  form fieldset.multiselect legend {
+    font-size: 0.78rem; padding: 0 0.3rem;
+    color: rgba(127,127,127,1);
+  }
+  form fieldset.multiselect label {
+    display: flex; flex-direction: row; align-items: center; gap: 0.25rem;
+    font-size: 0.88rem;
+  }
+  .meta {
+    color: rgba(127,127,127,1); font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+  }
+  .meta small { font-size: 0.78rem; }
+  .report-card {
+    display: block;
+    padding: 0.85rem 1rem;
+    border: 1px solid rgba(127,127,127,0.35);
+    border-radius: 6px;
+    margin-bottom: 0.75rem;
+    color: inherit;
+    text-decoration: none;
+    background: rgba(127,127,127,0.05);
+  }
+  .report-card:hover { background: rgba(127,127,127,0.12); }
+  .report-card h3 { margin: 0 0 0.3rem 0; font-size: 1rem; }
+  .report-card p { margin: 0; font-size: 0.85rem; color: rgba(127,127,127,1); }
+  .group { margin: 1.2rem 0; }
+  .group h2 .count {
+    color: rgba(127,127,127,0.85); font-weight: normal; font-size: 0.85rem;
+    margin-left: 0.4rem;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  th, td {
+    text-align: left; padding: 0.35rem 0.55rem;
+    border-bottom: 1px solid rgba(127,127,127,0.2);
+    vertical-align: top;
+  }
+  th { background: rgba(127,127,127,0.12); }
+  tr:hover td { background: rgba(127,127,127,0.07); }
+  .uuid {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.75rem; color: rgba(127,127,127,0.85);
+  }
+  .empty { color: rgba(127,127,127,0.8); font-style: italic; padding: 0.5rem 0; }
+  .error {
+    color: #b00020; padding: 0.75rem; border: 1px solid #b00020;
+    border-radius: 4px; margin-bottom: 1rem;
+  }
+  .nowrap { white-space: nowrap; }
+  .chart-wrap { max-width: 900px; margin: 1rem 0; }
+  canvas { max-width: 100%; height: auto; }
+</style>
+{% block head_extra %}{% endblock %}
+</head>
+<body>
+  <nav>
+    <a href="{{ url_for('catalog') }}" class="{% if request.endpoint == 'catalog' %}active{% endif %}">
+      Reports
+    </a>
+  </nav>
+  {% block content %}{% endblock %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>

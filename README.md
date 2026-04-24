@@ -1,15 +1,18 @@
-# qemu-world-lifetime
+# openstack-ops-bi
 
-QEMU instance lifetime reporting for large, multi-region OpenStack
-deployments. Queries MariaDB replicas (one per region, plus a shared
-Keystone) directly to answer: **for every instance in a given domain — in
-every region or just the ones you pick — when was it last started, stopped,
-shelved, unshelved, or live-migrated, and how long ago?**
+Multi-region OpenStack operations / BI reporting suite. Queries per-region
+MariaDB replicas plus a shared Keystone directly. Ships a report plugin
+architecture so new reports plug in without touching the CLI or web UI:
 
-Ships two interfaces that share one query layer:
+- **CLI** — `opsbi <report>` with a subparser per registered report, plus
+  `opsbi list-regions`, `list-domains`, `list-cells`.
+- **Web** — Flask catalog page; each report has its own form-driven page
+  and one-click Excel download. Charts render in-browser via Chart.js and
+  are embedded as PNGs in the Excel export.
 
-- **CLI** — interactive menu or flag-driven, plain-text grouped output.
-- **Web** — Flask UI with browser tables and one-click Excel export.
+The first report shipped is **qemu-lifetime** — for every instance in a
+given domain, when was it last started / stopped / shelved / unshelved /
+shelveOffload'd / live-migrated, and how long ago.
 
 ## Why query the DB instead of the API or virsh?
 
@@ -38,12 +41,18 @@ event so operator-initiated moves show up.
 ## Install
 
 ```
-git clone git@github.com:ssearles1911/qemu-world-lifetime.git
-cd qemu-world-lifetime
+git clone git@github.com:ssearles1911/openstack-ops-bi-suite.git
+cd openstack-ops-bi-suite
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 ```
+
+`pip install -e .` puts the `opsbi` console command on your PATH and
+pulls in runtime deps (PyMySQL, Flask, openpyxl, python-dotenv,
+matplotlib). `pip install -r requirements.txt` still works if you prefer
+not to install the package itself — in that case, invoke via
+`python -m openstack_bi.cli` instead of `opsbi`.
 
 ## Configuration
 
@@ -113,45 +122,41 @@ OS_DB_PASSWORD__DFW1=oneoff python qemu_lifetime_report.py --list-domains
 ## CLI usage
 
 ```
-# interactive — prompts for domain, then for the min-days filter
-python qemu_lifetime_report.py
+# list what's configured / reachable
+opsbi list-regions
+opsbi list-domains
+opsbi list-cells
 
-# fully non-interactive (defaults to all regions, vm_state=active)
-python qemu_lifetime_report.py --domain heroes --days 80
+# show all registered reports
+opsbi --help
 
-# scope to specific regions
-python qemu_lifetime_report.py --domain heroes --region dfw1 --region ord1
+# help for one report shows its parameters
+opsbi qemu-lifetime --help
 
-# include specific non-active states
-python qemu_lifetime_report.py --domain heroes --state active --state stopped
+# run qemu-lifetime across all regions for a domain
+opsbi qemu-lifetime --domain heroes
 
-# disable the state filter entirely
-python qemu_lifetime_report.py --domain heroes --all-states
+# scope to specific regions (repeat --regions); filter by state/age
+opsbi qemu-lifetime --domain heroes --regions dfw1 --regions ord1 \
+                    --state stopped --days 80
 
-# helpers
-python qemu_lifetime_report.py --list-domains
-python qemu_lifetime_report.py --list-regions
-python qemu_lifetime_report.py --list-cells       # groups by region
-python qemu_lifetime_report.py --help
+# use the "all states" sentinel to disable the state filter
+opsbi qemu-lifetime --domain heroes --state __all__
 ```
 
-Output is grouped by project under the selected domain, sorted oldest-first
-within each project so long-idle VMs surface at the top. Each row shows
-the region the instance lives in.
+Output is grouped per the report (the qemu-lifetime report groups by
+project; other reports may be flat). For each grouped section, rows
+come back pre-sorted by the report.
 
-**Region filter:** defaults to *all* configured regions. Pass `--region
-NAME` (repeatable) to restrict, or `--all-regions` to be explicit about the
-default.
+**qemu-lifetime filters:**
 
-**State filter:** by default only instances in `vm_state=active` are
-reported — the operational use case is running VMs. Use `--state`
-(repeatable) to pick other states, or `--all-states` to see everything.
-
-**Days filter:** with `--days N`, only instances whose most-recent
-lifecycle action is older than `N` days are shown. Instances with *no*
-recorded lifecycle action are included and anchored to
-`instances.created_at` (so a never-touched VM still shows up under any
-`--days` filter — usually what you want).
+- **Region** — defaults to *all* configured regions. `--regions NAME` is
+  repeatable.
+- **State** — defaults to `vm_state=active`. Pass `--state NAME` for a
+  single different state, or `--state __all__` for everything.
+- **Days** — `--days N` shows instances whose most-recent lifecycle event
+  is older than N days. Instances with *no* recorded lifecycle action are
+  anchored to `instances.created_at` so a never-touched VM still shows up.
 
 ## Web usage
 
@@ -160,18 +165,16 @@ python web.py
 # → http://127.0.0.1:8000/
 ```
 
-Pick a domain, tick the regions you want (all on by default), pick a state
-(defaults to `active`; pick *— all states —* to turn the filter off),
-optionally set a minimum-days filter, click **Run report**. The report
-renders grouped by project with a `region` column; click **Download
-Excel** to fetch the same query as an `.xlsx` with:
+Landing page is a report catalog. Click a report, fill in its form,
+click **Run report**. Results render in-page; charts (where the report
+defines any) render via vendored Chart.js. Click **Download Excel** to
+get an `.xlsx` with:
 
-- Metadata header (domain, regions, state filter, days filter, action set,
-  generated-at timestamp).
-- Frozen table header row and auto-filter on every column.
-- A `region` column for cross-region sorting/filtering.
-- A numeric `age_days` column alongside the human-readable `age`, so Excel
-  can sort/filter properly.
+- Metadata header at the top (all report metadata + generated-at
+  timestamp).
+- Data sheet with frozen header row and auto-filter on every column.
+- One sheet per chart, with a matplotlib-rendered PNG plus the raw
+  series data below it for spreadsheet formulas.
 
 Bind elsewhere:
 
@@ -187,9 +190,10 @@ pip install waitress
 waitress-serve --host=0.0.0.0 --port=8000 web:app
 ```
 
-## Lifecycle actions tracked
+## QEMU lifetime — actions tracked
 
-The report considers exactly these `nova.instance_actions.action` values:
+The qemu-lifetime report considers exactly these
+`nova.instance_actions.action` values:
 
 ```
 start, stop, shelve, unshelve, shelveOffload, live-migration
@@ -200,42 +204,64 @@ Deliberately excluded: `reboot`, `migrate` (cold), `resize`, `rebuild`,
 (reboots don't correlate with maintenance windows) or duplicate
 information already captured elsewhere (`create` = instance age).
 
-To change the set, edit `LIFECYCLE_ACTIONS` in `core.py` — the CLI, web
-UI, and Excel export all read from it.
+To change the set, edit `LIFECYCLE_ACTIONS` in
+`openstack_bi/reports/qemu_lifetime.py` — the CLI, web UI, and Excel
+export all read from it.
 
 ## How it works
 
-1. Parses per-region connection details from env/`.env` into a list of
-   `Region` objects (`openstack_bi.config`).
-2. Resolves the shared domain/project list once from the `KEYSTONE_REGION`
-   replica (`keystone.project`).
-3. For each selected region, discovers its cell DBs from
-   `nova_api.cell_mappings` and runs one query per cell that:
-   - pre-filters `instances` to projects in the selected domain,
-   - picks each instance's most recent lifecycle action via a CTE +
-     `ROW_NUMBER() OVER (PARTITION BY instance_uuid ORDER BY start_time DESC)`.
-4. Aggregates rows from every cell in every region in Python; tags each
-   row with its region; joins project names from the Keystone map;
-   computes age from `COALESCE(last_action_time, instances.created_at)`;
-   renders.
+1. Per-region connection details come from env/`.env` (parsed by
+   `openstack_bi.config` into `Region` objects).
+2. Each report is a `Report` subclass registered in
+   `openstack_bi/reports/__init__.py`. It declares params; the CLI and
+   web UI render those params into their respective input surfaces.
+3. At run time, a report's `run(**kwargs)` returns a `ReportResult`
+   (columns, rows, groupings, charts, metadata). The CLI prints a
+   grouped/flat text table; the web UI renders Chart.js + HTML tables;
+   the Excel exporter writes a workbook with a metadata block, the data
+   table, and one sheet per chart (matplotlib-rendered PNG + raw series).
+4. The QEMU-lifetime report specifically resolves a domain + project
+   list once from the shared Keystone, then for each selected region
+   discovers cell DBs and runs a CTE + window-function query per cell,
+   aggregating in Python and tagging each row with its region.
 
-The same `core.collect_report()` call powers the CLI, the web UI, and the
-Excel export — the table you see in the browser and the rows in the
-downloaded spreadsheet come from one query pass and are guaranteed to
-match.
+## Adding a new report
+
+1. Create `openstack_bi/reports/<slug>.py` with a subclass of
+   `openstack_bi.reports.base.Report` and a module-level
+   `REPORT = MyReport()`.
+2. Add `from . import <slug>` and append the module to `_ORDER` in
+   `openstack_bi/reports/__init__.py`.
+3. That's it — the report appears in `opsbi --help` and in the web
+   catalog automatically.
 
 ## Project layout
 
 ```
-openstack_bi/            multi-region config, DB access layer, shared utils
-  config.py              Region dataclass; parse_regions(); keystone_region()
-  db.py                  connect/query against a single (region, database)
-  util.py                humanize, annotate_ages
-core.py                  QEMU-lifetime-specific queries and constants
-qemu_lifetime_report.py  CLI entry point
-web.py                   Flask app + .xlsx export
-templates/index.html     single-page UI
-requirements.txt         PyMySQL, Flask, openpyxl, python-dotenv
+openstack_bi/
+  config.py         Region dataclass; parse_regions(); keystone_region()
+  db.py             connect/query against one (region, database)
+  openstack.py      shared Keystone + Nova cell queries
+  util.py           humanize, annotate_ages
+  cli.py            `opsbi` entry: argparse subparsers per report
+  reports/
+    __init__.py     registry — add new report modules here
+    base.py         Report ABC + Param/ReportResult/ChartSpec
+    qemu_lifetime.py
+  web/
+    __init__.py     Flask app factory
+    routes.py       catalog + per-report runner + Excel export
+    forms.py        request.args → report kwargs + form-values echo
+    excel.py        generic .xlsx with matplotlib chart embedding
+templates/
+  base.html         layout + CSS
+  catalog.html      report catalog
+  report.html       form + results + Chart.js canvases
+static/
+  chart.min.js      vendored Chart.js
+web.py              entry shim: `waitress-serve web:app`, `python web.py`
+pyproject.toml      exposes `opsbi` console script
+requirements.txt    runtime deps
 ```
 
 ## Limitations and notes

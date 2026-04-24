@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}{{ report.name }} — OpenStack Ops BI{% endblock %}
+{% block head_extra %}
+  {% if result and result.charts %}
+    <script src="{{ url_for('static', filename='chart.min.js') }}"></script>
+  {% endif %}
+{% endblock %}
+
+{% macro field(p, values, choices) -%}
+  {% if p.kind == 'select' %}
+    <label class="field">{{ p.label }}
+      <select name="{{ p.name }}" {% if p.required %}required{% endif %}>
+        {% if not p.required %}<option value=""></option>{% endif %}
+        {% for value, label in choices %}
+          <option value="{{ value }}" {% if values[p.name] == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  {% elif p.kind == 'multiselect' %}
+    <fieldset class="multiselect">
+      <legend>{{ p.label }}</legend>
+      {% for value, label in choices %}
+        <label>
+          <input type="checkbox" name="{{ p.name }}" value="{{ value }}"
+                 {% if value in values[p.name] %}checked{% endif %}>
+          {{ label }}
+        </label>
+      {% endfor %}
+    </fieldset>
+  {% elif p.kind == 'int' %}
+    <label class="field">{{ p.label }}
+      <input type="number" name="{{ p.name }}" min="0"
+             value="{{ values[p.name] if values[p.name] != None else '' }}"
+             {% if p.placeholder %}placeholder="{{ p.placeholder }}"{% endif %}>
+    </label>
+  {% elif p.kind == 'date' %}
+    <label class="field">{{ p.label }}
+      <input type="date" name="{{ p.name }}" value="{{ values[p.name] or '' }}">
+    </label>
+  {% elif p.kind == 'bool' %}
+    <label class="field" style="flex-direction: row; align-items: center; gap: 0.3rem;">
+      <input type="checkbox" name="{{ p.name }}" value="1" {% if values[p.name] %}checked{% endif %}>
+      {{ p.label }}
+    </label>
+  {% else %}
+    <label class="field">{{ p.label }}
+      <input type="text" name="{{ p.name }}" value="{{ values[p.name] or '' }}"
+             {% if p.placeholder %}placeholder="{{ p.placeholder }}"{% endif %}>
+    </label>
+  {% endif %}
+{%- endmacro %}
+
+{% block content %}
+<h1>{{ report.name }}</h1>
+<p class="meta">{{ report.description }}</p>
+
+<form method="get" action="{{ url_for('run_report', report_id=report.id) }}">
+  {% for p in report.params %}
+    {{ field(p, values, param_choices[p.name]) }}
+  {% endfor %}
+  <button type="submit">Run report</button>
+  {% if result and not error %}
+    <a class="btn"
+       href="{{ url_for('export_report', report_id=report.id) }}?{{ query_string }}">
+      Download Excel
+    </a>
+  {% endif %}
+</form>
+
+{% if error %}
+  <div class="error">{{ error }}</div>
+{% endif %}
+
+{% if result and not error %}
+  <div class="meta">
+    {% for key, value in result.metadata.items() %}
+      <strong>{{ key }}:</strong> {{ value }} &nbsp;·&nbsp;
+    {% endfor %}
+  </div>
+
+  {% if result.charts %}
+    {% for c in result.charts %}
+      <div class="chart-wrap">
+        <canvas id="chart-{{ loop.index0 }}"></canvas>
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  {% if result.groupings and grouped %}
+    {% for key in group_order %}
+      <section class="group">
+        <h2>
+          {{ key | map('string') | join(' / ') }}
+          <span class="count">({{ grouped[key]|length }} row{{ '' if grouped[key]|length == 1 else 's' }})</span>
+        </h2>
+        <table>
+          <thead>
+            <tr>
+              {% for col_key, col_label in visible_columns %}
+                {% if col_key not in result.groupings %}
+                  <th>{{ col_label }}</th>
+                {% endif %}
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in grouped[key] %}
+              <tr>
+                {% for col_key, _ in visible_columns %}
+                  {% if col_key not in result.groupings %}
+                    <td class="{% if col_key == 'uuid' %}uuid{% endif %}{% if col_key in ('last_action_time', 'age', 'created_at') %} nowrap{% endif %}">
+                      {{ r[col_key] if r[col_key] is not none else '-' }}
+                    </td>
+                  {% endif %}
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    {% endfor %}
+  {% elif result.rows %}
+    <table>
+      <thead>
+        <tr>
+          {% for _, col_label in visible_columns %}<th>{{ col_label }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in result.rows %}
+          <tr>
+            {% for col_key, _ in visible_columns %}
+              <td>{{ r[col_key] if r[col_key] is not none else '-' }}</td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No rows.</div>
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if result and result.charts %}
+<script>
+(function(){
+  const charts = {{ charts_json | safe }};
+  charts.forEach((spec, idx) => {
+    const el = document.getElementById('chart-' + idx);
+    if (!el) return;
+    const type = spec.kind === 'line' ? 'line'
+      : spec.kind === 'stacked_bar' ? 'bar' : 'bar';
+    const datasets = spec.series.map(s => ({ label: s.label, data: s.data }));
+    const cfg = {
+      type: type,
+      data: { labels: spec.x_categories, datasets: datasets },
+      options: {
+        plugins: { title: { display: !!spec.title, text: spec.title } },
+        scales: {
+          x: { stacked: spec.kind === 'stacked_bar',
+               title: { display: !!spec.x_label, text: spec.x_label } },
+          y: { stacked: spec.kind === 'stacked_bar', beginAtZero: true,
+               title: { display: !!spec.y_label, text: spec.y_label } }
+        }
+      }
+    };
+    new Chart(el, cfg);
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

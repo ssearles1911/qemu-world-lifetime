@@ -6,3 +6,6 @@ venv/
 .env
 *.xlsx
 .DS_Store
+*.egg-info/
+build/
+dist/
