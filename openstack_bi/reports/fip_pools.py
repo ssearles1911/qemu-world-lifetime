@@ -4,14 +4,19 @@ For each external network referenced by allocated floatingips in each
 region, report:
 
     pool_size  — total IPv4 addresses across the network's allocation pools
-    allocated  — total allocated FIPs (regardless of binding)
+    used       — IPs actually consumed in the pool (rows in `ipallocations`
+                 on the network's IPv4 subnets). This matches what
+                 `openstack ip availability show <net>` reports as `used_ips`,
+                 and includes router gateways + every FIP port + any other
+                 port plugged into the external network — not just FIP rows.
+    fips_total — total floating-IP records (`floatingips` row count)
     bound      — FIPs with fixed_port_id NOT NULL
     unbound    — FIPs with fixed_port_id IS NULL
-    free       — pool_size - allocated (may be < 0 if a manually-added
-                 IP sneaks outside the declared pools — flagged in status)
-    pct_used   — allocated / pool_size, as a percentage
+    free       — pool_size - used
+    pct_used   — used / pool_size, as a percentage
 
-Stacked bar per (region, network) showing bound / unbound / free.
+Stacked bar per (region, network) showing FIP-bound / FIP-unbound / non-FIP
+used / free, summing to pool_size.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ def _collect_region(region) -> List[Dict[str, Any]]:
         SELECT floating_network_id AS network_id,
                SUM(CASE WHEN fixed_port_id IS NOT NULL THEN 1 ELSE 0 END) AS bound,
                SUM(CASE WHEN fixed_port_id IS NULL     THEN 1 ELSE 0 END) AS unbound,
-               COUNT(*) AS allocated
+               COUNT(*) AS fips_total
         FROM floatingips
         GROUP BY floating_network_id
         """,
@@ -74,6 +79,31 @@ def _collect_region(region) -> List[Dict[str, Any]]:
         if "access denied" in msg or "can't connect" in msg or "connection" in msg:
             raise
 
+    # Real IP consumption per network — count ipallocations on its IPv4
+    # subnets. This is what `openstack ip availability show` reports as
+    # `used_ips`, so the two numbers reconcile.
+    used_by_network: Dict[str, int] = {}
+    try:
+        used_rows = query(
+            region, neutron_db(),
+            f"""
+            SELECT s.network_id AS network_id,
+                   COUNT(a.ip_address) AS used
+            FROM subnets s
+            LEFT JOIN ipallocations a ON a.subnet_id = s.id
+            WHERE s.ip_version = 4
+              AND s.network_id IN ({ph})
+            GROUP BY s.network_id
+            """,
+            list(network_ids),
+        )
+        used_by_network = {r["network_id"]: int(r["used"] or 0) for r in used_rows}
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if "access denied" in msg or "can't connect" in msg or "connection" in msg:
+            raise
+        # Schema mismatch — leave used at 0 so the report still renders.
+
     name_rows = query(
         region, neutron_db(),
         f"SELECT id, name FROM networks WHERE id IN ({ph})",
@@ -86,13 +116,14 @@ def _collect_region(region) -> List[Dict[str, Any]]:
     for net_id in network_ids:
         fip_row = fip_by_net.get(net_id, {})
         pool_size = pool_by_network.get(net_id, 0)
-        allocated = int(fip_row.get("allocated") or 0)
+        used = used_by_network.get(net_id, 0)
+        fips_total = int(fip_row.get("fips_total") or 0)
         bound = int(fip_row.get("bound") or 0)
         unbound = int(fip_row.get("unbound") or 0)
-        free = pool_size - allocated
-        pct = round((allocated / pool_size) * 100, 1) if pool_size else None
+        free = max(pool_size - used, 0) if pool_size else 0
+        pct = round((used / pool_size) * 100, 1) if pool_size else None
         status_note = "ok"
-        if pool_size == 0 and allocated > 0:
+        if pool_size == 0 and used > 0:
             status_note = "no declared pool"
         elif pct is not None and pct >= 95:
             status_note = "near-full"
@@ -103,10 +134,11 @@ def _collect_region(region) -> List[Dict[str, Any]]:
             "network_id": net_id,
             "network_name": network_names.get(net_id) or "",
             "pool_size": pool_size,
-            "allocated": allocated,
+            "used": used,
+            "fips_total": fips_total,
             "bound": bound,
             "unbound": unbound,
-            "free": max(free, 0),
+            "free": free,
             "pct_used": pct if pct is not None else "-",
             "status": status_note,
         })
@@ -117,9 +149,11 @@ class FipPoolsReport(Report):
     id = "fip_pools"
     name = "Floating IP pools"
     description = (
-        "Per-region external-network FIP pool utilization: pool size from "
-        "IP allocation pools, allocated count from `floatingips`, bound vs. "
-        "unbound split, and percent used."
+        "Per-region external-network FIP pool utilization. `used` and `free` "
+        "match `openstack ip availability` (counts ipallocations on the "
+        "network's IPv4 subnets, including router gateways and any non-FIP "
+        "ports). `bound`/`unbound`/`fips_total` come from the `floatingips` "
+        "table, so the FIP-specific operational signal is preserved."
     )
     params = [
         Param(name="regions", label="Regions", kind="multiselect",
@@ -152,6 +186,8 @@ class FipPoolsReport(Report):
         ))
 
         labels = [f"{r['region']} / {r['network_name'] or r['network_id'][:8]}" for r in rows_out]
+        # Stacked breakdown summing to pool_size: FIP-bound, FIP-unbound,
+        # non-FIP used (router gateways + anything else), and free.
         chart = ChartSpec(
             kind="stacked_bar",
             title="FIP pool utilization",
@@ -159,8 +195,11 @@ class FipPoolsReport(Report):
             y_label="IPs",
             x_categories=labels,
             series=[
-                {"label": "bound", "data": [r["bound"] for r in rows_out]},
-                {"label": "unbound", "data": [r["unbound"] for r in rows_out]},
+                {"label": "FIP bound", "data": [r["bound"] for r in rows_out]},
+                {"label": "FIP unbound", "data": [r["unbound"] for r in rows_out]},
+                {"label": "non-FIP used",
+                 "data": [max(r["used"] - r["bound"] - r["unbound"], 0)
+                          for r in rows_out]},
                 {"label": "free", "data": [r["free"] for r in rows_out]},
             ],
         )
@@ -169,7 +208,8 @@ class FipPoolsReport(Report):
             "regions": ", ".join(r.name for r in selected_regions) or "(none)",
             "networks": len(rows_out),
             "total_pool_size": sum(r["pool_size"] for r in rows_out),
-            "total_allocated": sum(r["allocated"] for r in rows_out),
+            "total_used": sum(r["used"] for r in rows_out),
+            "total_fips": sum(r["fips_total"] for r in rows_out),
             "total_unbound": sum(r["unbound"] for r in rows_out),
             "region_errors": format_region_errors(region_errors),
         }
@@ -184,14 +224,15 @@ class FipPoolsReport(Report):
             columns=[
                 ("region", "Region"),
                 ("network_name", "Network"),
-                ("network_id", "Network ID"),
                 ("pool_size", "Pool size"),
-                ("allocated", "Allocated"),
-                ("bound", "Bound"),
-                ("unbound", "Unbound"),
+                ("used", "Used"),
                 ("free", "Free"),
                 ("pct_used", "% used"),
+                ("fips_total", "FIPs"),
+                ("bound", "FIP bound"),
+                ("unbound", "FIP unbound"),
                 ("status", "Status"),
+                ("network_id", "Network ID"),
             ],
             rows=rows_out,
             charts=[chart] if rows_out else [],

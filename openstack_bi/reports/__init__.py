@@ -16,6 +16,7 @@ from .base import Report
 # The CLI and web UI enumerate reports in the order they appear in `_ORDER`.
 from . import fip_audit  # noqa: F401
 from . import fip_pools  # noqa: F401
+from . import fip_subnets  # noqa: F401
 from . import instance_history  # noqa: F401
 from . import instance_leaderboard  # noqa: F401
 from . import issues  # noqa: F401
@@ -35,6 +36,7 @@ _ORDER = [
     stale_snapshots,
     fip_audit,
     fip_pools,
+    fip_subnets,
     instance_history,
     volume_history,
     volume_resizes,
