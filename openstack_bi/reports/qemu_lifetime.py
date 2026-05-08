@@ -20,6 +20,7 @@ from .base import Param, Report, ReportResult
 
 
 ALL_STATES_SENTINEL = "__all__"
+ALL_DOMAINS_SENTINEL = "__all__"
 
 
 # Nova action names that count as a QEMU lifecycle event for this report.
@@ -50,7 +51,9 @@ COMMON_VM_STATES: Tuple[str, ...] = (
     "soft-deleted",
 )
 
-# Default state filter — the operational interest is in *running* instances.
+# Default state filter is now "all states" — the dropdown defaults to
+# the sentinel and `vm_states` resolves to None (no filter). Kept here
+# for any caller that explicitly opts into state-restricted runs.
 DEFAULT_VM_STATES: Tuple[str, ...] = ("active",)
 
 
@@ -122,11 +125,14 @@ def _fetch_instances(
 
 
 def _state_choices() -> List[Tuple[str, str]]:
-    return [(s, s) for s in COMMON_VM_STATES] + [(ALL_STATES_SENTINEL, "— all states —")]
+    # The all-states option is the default — sits at the top of the
+    # dropdown so users don't have to scroll past every individual state
+    # to opt out of filtering.
+    return [(ALL_STATES_SENTINEL, "— all states —")] + [(s, s) for s in COMMON_VM_STATES]
 
 
 def _domain_choices() -> List[Tuple[str, str]]:
-    return [
+    return [(ALL_DOMAINS_SENTINEL, "— all domains —")] + [
         (d["name"], f'{d["name"]} ({d["project_count"]} project(s))')
         for d in openstack.list_domains()
     ]
@@ -147,11 +153,14 @@ class QemuLifetimeReport(Report):
     category = "Lifecycle"
     params = [
         Param(name="domain", label="Domain", kind="select", required=True,
+              default=ALL_DOMAINS_SENTINEL,
               choices=_domain_choices,
-              help="Keystone domain to scope the report."),
+              help="Keystone domain to scope the report. Choose '— all domains —' "
+                   "to span every enabled project across the deployment."),
         Param(name="state", label="State", kind="select",
-              default="active", choices=_state_choices,
-              help="vm_state filter. Defaults to 'active' (running VMs)."),
+              default=ALL_STATES_SENTINEL, choices=_state_choices,
+              help="vm_state filter. Defaults to all states; pick a specific "
+                   "state to narrow the table."),
         Param(name="days", label="Min days since last event", kind="int",
               placeholder="any",
               help="Only show instances whose last lifecycle event is older than this many days."),
@@ -168,10 +177,13 @@ class QemuLifetimeReport(Report):
         regions: Optional[List[str]] = None,
         **_: Any,
     ) -> ReportResult:
-        if not state:
-            vm_states: Optional[List[str]] = list(DEFAULT_VM_STATES)
-        elif state == ALL_STATES_SENTINEL:
-            vm_states = None
+        # The dropdown defaults to "all states", so an empty/None value
+        # from the form means "no state filter" too. The legacy
+        # DEFAULT_VM_STATES value remains accessible to callers that
+        # explicitly request it (i.e. CLI passing --state active),
+        # because that path still hits the elif/else branches below.
+        if not state or state == ALL_STATES_SENTINEL:
+            vm_states: Optional[List[str]] = None
         else:
             vm_states = [state]
 
@@ -182,18 +194,26 @@ class QemuLifetimeReport(Report):
             by_name = {r.name: r for r in parse_regions()}
             selected_regions = [by_name[n] for n in selected_region_names if n in by_name]
 
-        domain_obj = openstack.find_domain(domain)
-        if domain_obj is None:
-            return ReportResult(
-                columns=[],
-                rows=[],
-                metadata={"error": f"Domain not found: {domain!r}"},
-                filename_stem=f"qemu-lifetime-{domain or 'no-domain'}",
-            )
-
-        projects = openstack.list_projects(domain_obj["id"])
-        project_ids = [p["id"] for p in projects]
-        name_by_id = {p["id"]: p["name"] for p in projects}
+        all_domains_run = (not domain) or domain == ALL_DOMAINS_SENTINEL
+        if all_domains_run:
+            projects = openstack.list_all_projects()
+            project_ids = [p["id"] for p in projects]
+            name_by_id = {p["id"]: p["name"] for p in projects}
+            domain_obj: Optional[Dict[str, Any]] = None
+            domain_label = "(all domains)"
+        else:
+            domain_obj = openstack.find_domain(domain)
+            if domain_obj is None:
+                return ReportResult(
+                    columns=[],
+                    rows=[],
+                    metadata={"error": f"Domain not found: {domain!r}"},
+                    filename_stem=f"qemu-lifetime-{domain or 'no-domain'}",
+                )
+            projects = openstack.list_projects(domain_obj["id"])
+            project_ids = [p["id"] for p in projects]
+            name_by_id = {p["id"]: p["name"] for p in projects}
+            domain_label = domain_obj["name"]
 
         def _collect(region: Region) -> List[Dict[str, Any]]:
             out: List[Dict[str, Any]] = []
@@ -230,8 +250,8 @@ class QemuLifetimeReport(Report):
 
         selected_names = [r.name for r in selected_regions]
         metadata = {
-            "domain": domain_obj["name"],
-            "domain_id": domain_obj["id"],
+            "domain": domain_label,
+            "domain_id": domain_obj["id"] if domain_obj else "(all)",
             "regions": ", ".join(selected_names) if selected_names else "(none)",
             "state_filter": ", ".join(vm_states) if vm_states else "(all states)",
             "days_filter": (
@@ -243,7 +263,7 @@ class QemuLifetimeReport(Report):
             "region_errors": format_region_errors(region_errors),
         }
 
-        stem_bits = [domain_obj["name"], "qemu-lifetime"]
+        stem_bits = [domain_obj["name"] if domain_obj else "all-domains", "qemu-lifetime"]
         stem_bits.append("-".join(vm_states) if vm_states else "all-states")
         stem_bits.append("-".join(selected_names) if selected_region_names is not None else "all-regions")
         if days is not None:
