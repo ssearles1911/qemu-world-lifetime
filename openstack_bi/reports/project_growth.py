@@ -21,8 +21,10 @@ from openstack_bi.config import parse_regions
 from openstack_bi.db import query
 from openstack_bi.util import (
     format_bucket_labels,
+    format_region_errors,
     make_buckets,
     reconstruct_concurrent_counts,
+    safe_for_each_region,
 )
 
 from .base import ChartSpec, Param, Report, ReportResult
@@ -48,26 +50,39 @@ def _granularity_choices() -> List[Tuple[str, str]]:
 
 def _fetch_lifecycle_events(
     regions, cell_cache, project_ids: List[str],
-) -> Dict[str, List[Tuple[datetime, int]]]:
-    """Return {project_id: [(ts, +1|-1), ...]} across every region/cell."""
+) -> Tuple[Dict[str, List[Tuple[datetime, int]]], List[Dict[str, str]]]:
+    """Return (events_by_project, region_errors).
+
+    events_by_project is {project_id: [(ts, +1|-1), ...]} unioned across
+    every region/cell that could be reached.
+    """
     if not project_ids:
-        return {}
+        return {}, []
     ph = ",".join(["%s"] * len(project_ids))
     sql = f"""
         SELECT project_id, created_at, deleted_at
         FROM instances
         WHERE project_id IN ({ph})
     """
-    events: Dict[str, List[Tuple[datetime, int]]] = defaultdict(list)
-    for region in regions:
+
+    def _collect(region):
+        region_events = []
         for cell in cell_cache[region.name]:
             for r in query(region, cell, sql, project_ids):
-                pid = r["project_id"]
-                if r.get("created_at") is not None:
-                    events[pid].append((r["created_at"], +1))
-                if r.get("deleted_at") is not None:
-                    events[pid].append((r["deleted_at"], -1))
-    return events
+                region_events.append(r)
+        return region_events
+
+    results, region_errors = safe_for_each_region(regions, _collect)
+
+    events: Dict[str, List[Tuple[datetime, int]]] = defaultdict(list)
+    for _, region_events in results:
+        for r in region_events:
+            pid = r["project_id"]
+            if r.get("created_at") is not None:
+                events[pid].append((r["created_at"], +1))
+            if r.get("deleted_at") is not None:
+                events[pid].append((r["deleted_at"], -1))
+    return events, region_errors
 
 
 class ProjectGrowthReport(Report):
@@ -147,8 +162,17 @@ class ProjectGrowthReport(Report):
             )
         labels = format_bucket_labels(boundaries, granularity)
 
-        cell_cache = {r.name: openstack.list_cells(r) for r in selected_regions}
-        events_by_project = _fetch_lifecycle_events(selected_regions, cell_cache, project_ids)
+        def _cells(region):
+            return openstack.list_cells(region)
+
+        cell_results, cell_errors = safe_for_each_region(selected_regions, _cells)
+        cell_cache = {r.name: cells for r, cells in cell_results}
+        # Skip regions whose cell discovery failed — they can't contribute rows.
+        reachable_regions = [r for r, _ in cell_results]
+        events_by_project, query_errors = _fetch_lifecycle_events(
+            reachable_regions, cell_cache, project_ids,
+        )
+        region_errors = cell_errors + query_errors
 
         # Per-project time series.
         series_by_project: Dict[str, List[int]] = {}
@@ -222,6 +246,7 @@ class ProjectGrowthReport(Report):
             "regions": ", ".join(r.name for r in selected_regions) or "(none)",
             "projects": len(project_ids),
             "buckets": len(boundaries),
+            "region_errors": format_region_errors(region_errors),
         }
 
         stem_bits = [

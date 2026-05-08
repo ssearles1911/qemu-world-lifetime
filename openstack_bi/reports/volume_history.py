@@ -49,6 +49,7 @@ class VolumeHistoryReport(Report):
         attach_rows: List[Dict[str, Any]] = []
         recent_messages: List[Dict[str, Any]] = []
         found_region: Optional[str] = None
+        region_errors: List[Dict[str, str]] = []
 
         for region in parse_regions():
             try:
@@ -64,7 +65,8 @@ class VolumeHistoryReport(Report):
                     """,
                     (uuid,),
                 )
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                region_errors.append({"region": region.name, "error": f"{type(exc).__name__}: {exc}"})
                 continue
             if not rows:
                 continue
@@ -99,9 +101,14 @@ class VolumeHistoryReport(Report):
             break
 
         if volume_row is None:
+            err = f"Volume {uuid!r} not found in any region."
+            if region_errors:
+                err += " Some regions were unreachable: " + "; ".join(
+                    f"{e['region']}: {e['error']}" for e in region_errors
+                )
             return ReportResult(
                 columns=[], rows=[],
-                metadata={"error": f"Volume {uuid!r} not found in any region."},
+                metadata={"error": err},
                 filename_stem=f"volume-history-{uuid}",
             )
 
@@ -139,6 +146,7 @@ class VolumeHistoryReport(Report):
             for m in recent_messages
         ) or "(none)"
 
+        from openstack_bi.util import format_region_errors
         metadata = {
             "volume_uuid": uuid,
             "display_name": volume_row.get("display_name") or "(unnamed)",
@@ -153,6 +161,7 @@ class VolumeHistoryReport(Report):
             "deleted_at": volume_row.get("deleted_at") or "(active)",
             "attachments_recorded": len(rows_out),
             "recent_messages": messages_summary,
+            "region_errors": format_region_errors(region_errors),
         }
 
         return ReportResult(

@@ -17,7 +17,7 @@ from openstack_bi.config import (
     parse_regions,
 )
 from openstack_bi.db import query
-from openstack_bi.util import humanize
+from openstack_bi.util import format_region_errors, humanize, safe_for_each_region
 
 from .base import Param, Report, ReportResult
 
@@ -137,9 +137,14 @@ class StaleSnapshotsReport(Report):
             args = [days_n]
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        def _collect(region):
+            return query(region, cinder_db(), sql, args)
+
+        results, region_errors = safe_for_each_region(selected_regions, _collect)
         rows_out: List[Dict[str, Any]] = []
-        for region in selected_regions:
-            for r in query(region, cinder_db(), sql, args):
+        for region, rs in results:
+            for r in rs:
                 created_at = r.get("created_at")
                 age_seconds = (now - created_at).total_seconds() if created_at else None
                 rows_out.append({
@@ -189,6 +194,7 @@ class StaleSnapshotsReport(Report):
             "total_stale_snapshots": len(rows_out),
             "total_stale_gb": sum(int(r["volume_size_gb"] or 0) for r in rows_out),
             "top_offenders": top_offenders or "(none)",
+            "region_errors": format_region_errors(region_errors),
         }
 
         stem_bits = ["stale-snapshots", f"{days_n}d"]

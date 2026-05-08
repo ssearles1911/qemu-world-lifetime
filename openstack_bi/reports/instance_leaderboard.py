@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openstack_bi import openstack
 from openstack_bi.config import parse_regions
 from openstack_bi.db import query
+from openstack_bi.util import format_region_errors, safe_for_each_region
 
 from .base import ChartSpec, Param, Report, ReportResult
 
@@ -103,12 +104,19 @@ class InstanceLeaderboardReport(Report):
         # per-project counts: {project_id: {vm_state: count}}
         per_project: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         sql, args = _counts_sql(project_ids)
-        for region in selected_regions:
+
+        def _collect(region):
+            rows_out = []
             for cell in openstack.list_cells(region):
-                for r in query(region, cell, sql, args):
-                    pid = r["project_id"]
-                    state = r.get("vm_state") or "unknown"
-                    per_project[pid][state] += int(r["n"] or 0)
+                rows_out.extend(query(region, cell, sql, args))
+            return rows_out
+
+        results, region_errors = safe_for_each_region(selected_regions, _collect)
+        for _, region_rows in results:
+            for r in region_rows:
+                pid = r["project_id"]
+                state = r.get("vm_state") or "unknown"
+                per_project[pid][state] += int(r["n"] or 0)
 
         # Resolve project names. For a domain-scoped run we already have
         # name_by_id; for an unscoped run fetch every project referenced.
@@ -173,6 +181,7 @@ class InstanceLeaderboardReport(Report):
             "projects_with_instances": len(rows_out),
             "total_instances": sum(r["total"] for r in rows_out),
             "total_active": sum(r["active"] for r in rows_out),
+            "region_errors": format_region_errors(region_errors),
         }
 
         stem_bits = ["instance-leaderboard"]

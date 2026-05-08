@@ -28,7 +28,7 @@ from openstack_bi.config import (
     parse_regions,
 )
 from openstack_bi.db import query
-from openstack_bi.util import humanize
+from openstack_bi.util import format_region_errors, humanize, safe_for_each_region
 
 from .base import ChartSpec, Param, Report, ReportResult
 
@@ -125,14 +125,18 @@ class IssuesReport(Report):
         fip_d = max(0, int(fip_days or 30))
         snap_d = max(1, int(snapshot_days or 180))
 
-        findings: List[Dict[str, Any]] = []
-        for region in selected_regions:
-            findings.extend(_check_error_instances(region, project_filter))
-            findings.extend(_check_stuck_task_state(region, project_filter, stuck_h))
-            findings.extend(_check_stuck_volumes(region, project_filter, stuck_h))
-            findings.extend(_check_orphaned_volumes(region, project_filter, orphan_d))
-            findings.extend(_check_old_unbound_fips(region, project_filter, fip_d))
-            findings.extend(_check_stale_snapshots(region, project_filter, snap_d))
+        def _run_checks(region):
+            acc: List[Dict[str, Any]] = []
+            acc.extend(_check_error_instances(region, project_filter))
+            acc.extend(_check_stuck_task_state(region, project_filter, stuck_h))
+            acc.extend(_check_stuck_volumes(region, project_filter, stuck_h))
+            acc.extend(_check_orphaned_volumes(region, project_filter, orphan_d))
+            acc.extend(_check_old_unbound_fips(region, project_filter, fip_d))
+            acc.extend(_check_stale_snapshots(region, project_filter, snap_d))
+            return acc
+
+        per_region_results, region_errors = safe_for_each_region(selected_regions, _run_checks)
+        findings: List[Dict[str, Any]] = [f for _, fs in per_region_results for f in fs]
 
         # Resolve project names for any rows we couldn't pre-populate.
         unknown_pids = {f["project_id"] for f in findings if f["project_id"] and f.get("project_name") is None}
@@ -193,6 +197,7 @@ class IssuesReport(Report):
                 f"{sev}={sum(1 for f in findings if f['severity'] == sev)}"
                 for sev in ("critical", "error", "warn", "info")
             ),
+            "region_errors": format_region_errors(region_errors),
         }
 
         stem_bits = ["issues"]

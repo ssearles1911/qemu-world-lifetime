@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 from collections import defaultdict
 from typing import Any, Dict, List
 
@@ -22,6 +23,28 @@ def register(app: Flask) -> None:
         view_func=export_report,
         endpoint="export_report",
     )
+    app.register_error_handler(Exception, _render_error)
+
+
+def _render_error(exc):
+    """Render uncaught exceptions as a readable page with a traceback.
+
+    This catches errors that slip past per-region tolerance (schema
+    mismatches, unhandled DB drivers, bugs). The traceback is always
+    shown — the UI is local-only by convention, so there's no risk of
+    leaking it externally.
+    """
+    from werkzeug.exceptions import HTTPException
+    if isinstance(exc, HTTPException):
+        return exc
+    tb = traceback.format_exc()
+    return render_template(
+        "error.html",
+        reports=all_reports(),
+        exception_type=type(exc).__name__,
+        exception_message=str(exc),
+        traceback=tb,
+    ), 500
 
 
 def catalog():

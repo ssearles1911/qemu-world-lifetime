@@ -22,6 +22,7 @@ architecture so new reports plug in without touching the CLI or web UI:
 | `stale_snapshots` | Cinder snapshots older than N days, one row per snapshot, grouped by project. |
 | `fip_audit` | Unbound floating IPs per project, sorted oldest-first. |
 | `fip_pools` | Per-region external-network FIP pool utilization. |
+| `fip_subnets` | Per-subnet, per-allocation-pool drill-down of FIP-bearing external networks (CIDR, gateway, range bounds, used vs. free). Per-region TOTAL row. |
 | `instance_history` | Full Nova action log for one instance UUID (drill-down). |
 | `volume_history` | Cinder metadata + attachment timeline for one volume UUID (drill-down). |
 | `volume_resizes` | Cinder extend events in the last N days (limited by `cinder.messages` retention). |

@@ -18,7 +18,7 @@ from openstack_bi.config import (
     parse_regions,
 )
 from openstack_bi.db import query
-from openstack_bi.util import humanize
+from openstack_bi.util import format_region_errors, humanize, safe_for_each_region
 
 from .base import ChartSpec, Param, Report, ReportResult
 
@@ -143,13 +143,22 @@ class FipAuditReport(Report):
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         rows_out: List[Dict[str, Any]] = []
 
-        for region in selected_regions:
+        def _collect(region):
             try:
-                rows = query(region, neutron_db(), sql_with_timestamps, args)
-            except Exception:  # noqa: BLE001
-                # Some Neutron releases don't have standardattributes; drop
-                # the timestamp join and age filter.
-                rows = query(region, neutron_db(), sql_no_timestamps, args if days_n == 0 else args[:-1])
+                return query(region, neutron_db(), sql_with_timestamps, args)
+            except Exception as schema_err:  # noqa: BLE001
+                # Maybe the `standardattributes` table is missing (older
+                # Neutron) — try the no-timestamp variant. But don't swallow
+                # connection/auth failures; let them bubble up to the
+                # per-region safety net.
+                msg = str(schema_err).lower()
+                if "standardattributes" not in msg and "unknown table" not in msg:
+                    raise
+                return query(region, neutron_db(), sql_no_timestamps,
+                             args if days_n == 0 else args[:-1])
+
+        results, region_errors = safe_for_each_region(selected_regions, _collect)
+        for region, rows in results:
             for r in rows:
                 created_at = r.get("created_at")
                 age_seconds = (now - created_at).total_seconds() if created_at else None
@@ -205,6 +214,7 @@ class FipAuditReport(Report):
             "regions": ", ".join(r.name for r in selected_regions) or "(none)",
             "total_unbound_fips": len(rows_out),
             "projects_holding_unbound": len(by_project),
+            "region_errors": format_region_errors(region_errors),
         }
 
         stem_bits = ["fip-audit"]

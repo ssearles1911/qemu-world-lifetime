@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from openstack_bi import openstack
 from openstack_bi.config import Region, parse_regions
 from openstack_bi.db import query
-from openstack_bi.util import annotate_ages
+from openstack_bi.util import annotate_ages, format_region_errors, safe_for_each_region
 
 from .base import Param, Report, ReportResult
 
@@ -194,10 +194,14 @@ class QemuLifetimeReport(Report):
         project_ids = [p["id"] for p in projects]
         name_by_id = {p["id"]: p["name"] for p in projects}
 
-        rows: List[Dict[str, Any]] = []
-        for region in selected_regions:
+        def _collect(region: Region) -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
             for cell in openstack.list_cells(region):
-                rows.extend(_fetch_instances(region, cell, project_ids, days, vm_states))
+                out.extend(_fetch_instances(region, cell, project_ids, days, vm_states))
+            return out
+
+        results, region_errors = safe_for_each_region(selected_regions, _collect)
+        rows: List[Dict[str, Any]] = [r for _, rs in results for r in rs]
 
         for row in rows:
             row["project_name"] = name_by_id.get(row["project_id"])
@@ -235,6 +239,7 @@ class QemuLifetimeReport(Report):
             "lifecycle_actions": ", ".join(LIFECYCLE_ACTIONS),
             "total_instances": len(rows),
             "projects_with_data": len({r.get("project_id") for r in rows}),
+            "region_errors": format_region_errors(region_errors),
         }
 
         stem_bits = [domain_obj["name"], "qemu-lifetime"]

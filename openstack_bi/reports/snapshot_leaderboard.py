@@ -20,7 +20,7 @@ from openstack_bi.config import (
     parse_regions,
 )
 from openstack_bi.db import query
-from openstack_bi.util import humanize
+from openstack_bi.util import format_region_errors, humanize, safe_for_each_region
 
 from .base import ChartSpec, Param, Report, ReportResult
 
@@ -121,8 +121,12 @@ class SnapshotLeaderboardReport(Report):
             """
             cinder_args = []
 
-        for region in selected_regions:
-            for r in query(region, cinder_db(), cinder_sql, cinder_args):
+        def _cinder_rows(region):
+            return query(region, cinder_db(), cinder_sql, cinder_args)
+
+        cinder_results, cinder_errors = safe_for_each_region(selected_regions, _cinder_rows)
+        for _, rs in cinder_results:
+            for r in rs:
                 pid = r["project_id"]
                 bucket = totals[pid]
                 bucket["cinder_snapshots"] += int(r["n"] or 0)
@@ -164,12 +168,12 @@ class SnapshotLeaderboardReport(Report):
             """
             glance_args = []
 
-        for region in selected_regions:
-            try:
-                rows = query(region, glance_db(), glance_sql, glance_args)
-            except Exception:  # noqa: BLE001 — Glance is optional
-                continue
-            for r in rows:
+        def _glance_rows(region):
+            return query(region, glance_db(), glance_sql, glance_args)
+
+        glance_results, glance_errors = safe_for_each_region(selected_regions, _glance_rows)
+        for _, rs in glance_results:
+            for r in rs:
                 pid = r["project_id"]
                 bucket = totals[pid]
                 bucket["glance_snapshots"] += int(r["n"] or 0)
@@ -226,6 +230,7 @@ class SnapshotLeaderboardReport(Report):
             "total_cinder_snapshots": sum(r["cinder_snapshots"] for r in rows_out),
             "total_cinder_gb": sum(r["cinder_gb"] for r in rows_out),
             "total_glance_snapshots": sum(r["glance_snapshots"] for r in rows_out),
+            "region_errors": format_region_errors(cinder_errors + glance_errors),
         }
 
         stem_bits = ["snapshot-leaderboard"]

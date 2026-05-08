@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Error — OpenStack Ops BI{% endblock %}
+{% block content %}
+<h1>Something went wrong</h1>
+<div class="error">
+  <strong>{{ exception_type }}:</strong> {{ exception_message }}
+</div>
+<details open>
+  <summary>Traceback</summary>
+  <pre style="font-size: 0.75rem; overflow-x: auto; padding: 0.75rem; background: rgba(127,127,127,0.1); border-radius: 4px;">{{ traceback }}</pre>
+</details>
+<p class="meta">
+  <a href="{{ url_for('catalog') }}">← back to reports</a>
+</p>
+{% endblock %}

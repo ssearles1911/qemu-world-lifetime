@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypeVar
 
 
 def humanize(seconds: Optional[float]) -> str:
@@ -105,6 +105,44 @@ def reconstruct_concurrent_counts(
             i += 1
         out.append(running)
     return out
+
+
+T = TypeVar("T")
+
+
+def safe_for_each_region(
+    regions: Sequence[Any],
+    fn: Callable[[Any], T],
+) -> Tuple[List[Tuple[Any, T]], List[Dict[str, str]]]:
+    """Call `fn(region)` for each region, tolerating per-region failures.
+
+    Returns `(results, errors)` where `results` is the list of successful
+    `(region, return_value)` pairs and `errors` is a list of
+    `{"region": name, "error": str(exc)}` dicts for the failures. Any
+    exception raised by `fn` is captured — callers don't need to wrap.
+
+    This is the standard fan-out pattern for multi-region reports: one
+    dead replica shouldn't crash a whole report run.
+    """
+    results: List[Tuple[Any, T]] = []
+    errors: List[Dict[str, str]] = []
+    for region in regions:
+        try:
+            results.append((region, fn(region)))
+        except Exception as exc:  # noqa: BLE001 — intentional catch-all
+            errors.append({"region": region.name, "error": f"{type(exc).__name__}: {exc}"})
+    return results, errors
+
+
+def format_region_errors(errors: Sequence[Dict[str, str]]) -> str:
+    """Render a region-error list as a short human-readable string.
+
+    Used in ReportResult.metadata so the UI / Excel export / CLI can all
+    show the same summary.
+    """
+    if not errors:
+        return "(none)"
+    return "; ".join(f"{e['region']}: {e['error']}" for e in errors)
 
 
 def format_bucket_labels(boundaries: Sequence[datetime], granularity: str) -> List[str]:

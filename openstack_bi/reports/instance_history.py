@@ -46,21 +46,30 @@ class InstanceHistoryReport(Report):
         found_region: Optional[str] = None
         found_cell: Optional[str] = None
 
+        region_errors: List[Dict[str, str]] = []
         for region in parse_regions():
-            cells = openstack.list_cells(region)
+            try:
+                cells = openstack.list_cells(region)
+            except Exception as exc:  # noqa: BLE001
+                region_errors.append({"region": region.name, "error": f"{type(exc).__name__}: {exc}"})
+                continue
             for cell in cells:
-                rows = query(
-                    region, cell,
-                    """
-                    SELECT uuid, display_name, project_id, host,
-                           vm_state, power_state, task_state,
-                           created_at, deleted_at, deleted
-                    FROM instances
-                    WHERE uuid = %s
-                    LIMIT 1
-                    """,
-                    (uuid,),
-                )
+                try:
+                    rows = query(
+                        region, cell,
+                        """
+                        SELECT uuid, display_name, project_id, host,
+                               vm_state, power_state, task_state,
+                               created_at, deleted_at, deleted
+                        FROM instances
+                        WHERE uuid = %s
+                        LIMIT 1
+                        """,
+                        (uuid,),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    region_errors.append({"region": f"{region.name}/{cell}", "error": f"{type(exc).__name__}: {exc}"})
+                    continue
                 if not rows:
                     continue
                 instance_row = rows[0]
@@ -93,9 +102,14 @@ class InstanceHistoryReport(Report):
                 break
 
         if instance_row is None:
+            err = f"Instance {uuid!r} not found in any region/cell."
+            if region_errors:
+                err += " Some regions were unreachable: " + "; ".join(
+                    f"{e['region']}: {e['error']}" for e in region_errors
+                )
             return ReportResult(
                 columns=[], rows=[],
-                metadata={"error": f"Instance {uuid!r} not found in any region/cell."},
+                metadata={"error": err},
                 filename_stem=f"instance-history-{uuid}",
             )
 
@@ -130,6 +144,7 @@ class InstanceHistoryReport(Report):
                 "last_event_result": r.get("last_event_result"),
             })
 
+        from openstack_bi.util import format_region_errors
         metadata = {
             "instance_uuid": uuid,
             "instance_name": instance_row.get("display_name"),
@@ -144,6 +159,7 @@ class InstanceHistoryReport(Report):
             "created_at": instance_row.get("created_at"),
             "deleted_at": instance_row.get("deleted_at") or "(active)",
             "actions_recorded": len(rows_out),
+            "region_errors": format_region_errors(region_errors),
         }
 
         return ReportResult(

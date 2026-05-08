@@ -19,7 +19,7 @@ from openstack_bi.config import (
     parse_regions,
 )
 from openstack_bi.db import query
-from openstack_bi.util import humanize
+from openstack_bi.util import format_region_errors, humanize, safe_for_each_region
 
 from .base import Param, Report, ReportResult
 
@@ -134,11 +134,11 @@ class VolumeResizesReport(Report):
         rows_out: List[Dict[str, Any]] = []
         volume_ids_by_region: Dict[str, List[str]] = {}
 
-        for region in selected_regions:
-            try:
-                region_rows = query(region, cinder_db(), base_sql, args)
-            except Exception:  # noqa: BLE001
-                region_rows = []
+        def _collect(region):
+            return query(region, cinder_db(), base_sql, args)
+
+        results, region_errors = safe_for_each_region(selected_regions, _collect)
+        for region, region_rows in results:
             volume_ids_by_region[region.name] = [r["volume_id"] for r in region_rows if r.get("volume_id")]
             for r in region_rows:
                 created_at = r.get("created_at")
@@ -201,6 +201,7 @@ class VolumeResizesReport(Report):
             "total_resize_events": len(rows_out),
             "note": "Source: cinder.messages action_id='extend_volume'. "
                     "Retention in that table can be short — older resizes may not appear.",
+            "region_errors": format_region_errors(region_errors),
         }
 
         stem_bits = ["volume-resizes", f"{days_n}d"]

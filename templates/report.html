@@ -72,9 +72,18 @@
 {% endif %}
 
 {% if result and not error %}
+  {% set region_errors = result.metadata.get('region_errors') %}
+  {% if region_errors and region_errors != '(none)' %}
+    <div class="warning">
+      <strong>Region errors:</strong> {{ region_errors }}
+      <br><small>Results below reflect only the regions that responded.</small>
+    </div>
+  {% endif %}
   <div class="meta">
     {% for key, value in result.metadata.items() %}
-      <strong>{{ key }}:</strong> {{ value }} &nbsp;·&nbsp;
+      {% if key != 'region_errors' %}
+        <strong>{{ key }}:</strong> {{ value }} &nbsp;·&nbsp;
+      {% endif %}
     {% endfor %}
   </div>
 
