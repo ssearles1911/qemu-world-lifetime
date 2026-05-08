@@ -209,7 +209,7 @@ class SplaInstancesReport(Report):
         ),
         Param(
             name="exclude_aggregates", label="Exclude host aggregates",
-            kind="multiselect",
+            kind="multiselect", widget="dropdown",
             choices=_aggregate_choices,
             advanced=True,
             help="Hosts that belong to any selected aggregate are excluded.",

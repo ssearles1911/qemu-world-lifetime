@@ -65,6 +65,22 @@
         {% endfor %}
       </select>
     </div>
+  {% elif p.kind == 'multiselect' and p.widget == 'dropdown' %}
+    <div class="form-group">
+      <label class="form-label">{{ p.label }}</label>
+      <select class="form-select" name="{{ p.name }}" multiple
+              size="{{ [choices|length, 8]|min if choices else 4 }}">
+        {% for value, label in choices %}
+          <option value="{{ value }}"
+                  {% if value in values[p.name] %}selected{% endif %}>
+            {{ label }}
+          </option>
+        {% endfor %}
+      </select>
+      <span class="text-xs text-gray-500 mt-1 block">
+        Hold Ctrl (Cmd on Mac) and click to select multiple. Empty = no filter.
+      </span>
+    </div>
   {% elif p.kind == 'multiselect' %}
     <fieldset class="card card-body">
       <legend class="form-label px-1">{{ p.label }}</legend>
