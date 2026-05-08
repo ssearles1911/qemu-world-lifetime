@@ -7,12 +7,15 @@ discovery, host aggregate discovery) live here.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+import logging
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 from .config import Region, keystone_db, keystone_region, nova_api_db, parse_regions
 from .db import query
 from .util import safe_for_each_region
+
+log = logging.getLogger(__name__)
 
 
 def list_domains() -> List[Dict[str, Any]]:
@@ -70,32 +73,50 @@ def list_all_projects() -> List[Dict[str, Any]]:
     return query(keystone_region(), keystone_db(), sql)
 
 
-def list_aggregates() -> List[Dict[str, Any]]:
+def list_aggregates_with_errors() -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     """Names of every Nova host aggregate, across every configured region.
 
-    Returns one row per `(region, aggregate)` pair: `{"region", "name"}`.
-    Aggregate names can repeat across regions; the form's multiselect
-    deduplicates by name when rendering choices, but we surface the
-    region in the row so callers can correlate where each aggregate
-    lives if needed.
+    Returns `(rows, errors)`:
+      • `rows` — one row per `(region, aggregate)` pair: `{"region", "name"}`.
+      • `errors` — per-region `{"region", "error"}` for replicas that
+        couldn't be queried. The CLI's `list-aggregates` surfaces these
+        directly; the SPLA form swallows them but logs them at WARNING.
 
-    Per-region failures are silently dropped — a dead replica should not
-    prevent the SPLA form from rendering.
+    The `deleted` predicate accepts both `= 0` and `IS NULL` because
+    different OpenStack releases default the column differently.
     """
     schema = nova_api_db()
 
     def _collect(region: Region) -> List[Dict[str, Any]]:
         rows = query(
             region, schema,
-            "SELECT name FROM aggregates WHERE deleted = 0 ORDER BY name",
+            """
+            SELECT name FROM aggregates
+            WHERE (deleted = 0 OR deleted IS NULL)
+            ORDER BY name
+            """,
         )
         return [{"region": region.name, "name": r["name"]} for r in rows]
 
-    results, _errors = safe_for_each_region(parse_regions(), _collect)
+    results, errors = safe_for_each_region(parse_regions(), _collect)
     out: List[Dict[str, Any]] = []
     for _, region_rows in results:
         out.extend(region_rows)
-    return out
+    return out, errors
+
+
+def list_aggregates() -> List[Dict[str, Any]]:
+    """Convenience wrapper for callers that don't care about per-region
+    errors — they get logged so an operator can still find the cause in
+    the server log when the form's dropdown is mysteriously empty.
+    """
+    rows, errors = list_aggregates_with_errors()
+    for err in errors:
+        log.warning(
+            "list_aggregates: region %s failed: %s",
+            err.get("region"), err.get("error"),
+        )
+    return rows
 
 
 def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]:
@@ -114,8 +135,8 @@ def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]
         FROM aggregate_hosts ah
         JOIN aggregates a ON a.id = ah.aggregate_id
         WHERE a.name IN ({placeholders})
-          AND ah.deleted = 0
-          AND a.deleted = 0
+          AND (ah.deleted = 0 OR ah.deleted IS NULL)
+          AND (a.deleted = 0 OR a.deleted IS NULL)
         """,
         list(aggregate_names),
     )

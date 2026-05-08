@@ -158,6 +158,24 @@ def _handle_top_level(name: str) -> int:
             for cell in openstack.list_cells(region):
                 print(f"{region.name}\t{cell}")
         return 0
+    if name == "list-aggregates":
+        rows, errors = openstack.list_aggregates_with_errors()
+        if not rows and not errors:
+            print("(no aggregates found in any region)")
+        else:
+            grouped: Dict[str, List[str]] = defaultdict(list)
+            for row in rows:
+                grouped[row["region"]].append(row["name"])
+            for region in sorted(grouped):
+                print(region)
+                for name in sorted(grouped[region]):
+                    print(f"  {name}")
+        if errors:
+            print("\nErrors:", file=sys.stderr)
+            for err in errors:
+                print(f"  {err['region']}: {err['error']}", file=sys.stderr)
+            return 1
+        return 0
     raise AssertionError(f"unknown top-level command: {name}")
 
 
@@ -370,6 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("list-regions", "List configured regions."),
         ("list-domains", "List enabled Keystone domains."),
         ("list-cells", "List discovered Nova cell DBs per region."),
+        ("list-aggregates", "List Nova host aggregates per region (with errors)."),
     ]:
         sub.add_parser(name, help=desc, description=desc)
 
@@ -443,7 +462,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.command in ("init", "list-regions", "list-domains", "list-cells"):
+        if args.command in (
+            "init", "list-regions", "list-domains", "list-cells", "list-aggregates",
+        ):
             return _handle_top_level(args.command)
         if args.command == "admin":
             return _handle_admin(args)
