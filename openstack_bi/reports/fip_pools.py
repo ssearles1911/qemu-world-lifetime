@@ -155,6 +155,7 @@ class FipPoolsReport(Report):
         "ports). `bound`/`unbound`/`fips_total` come from the `floatingips` "
         "table, so the FIP-specific operational signal is preserved."
     )
+    category = "Capacity"
     params = [
         Param(name="regions", label="Regions", kind="multiselect",
               choices=_region_choices,

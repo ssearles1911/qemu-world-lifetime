@@ -59,6 +59,7 @@ class InstanceLeaderboardReport(Report):
         "down by vm_state (active / stopped / shelved / error / other). Scope "
         "to one domain or run across every enabled project in the deployment."
     )
+    category = "Projects"
     params = [
         Param(name="domain", label="Domain", kind="select",
               choices=_domain_choices, default="",
@@ -67,7 +68,7 @@ class InstanceLeaderboardReport(Report):
               choices=_region_choices,
               help="Which regions to span. Empty = all configured regions."),
         Param(name="top", label="Top N (chart)", kind="int", default=20,
-              placeholder="20",
+              placeholder="20", advanced=True,
               help="How many projects to include in the top-N chart. The table always shows everything."),
     ]
 

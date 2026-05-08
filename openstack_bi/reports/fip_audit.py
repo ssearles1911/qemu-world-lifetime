@@ -42,6 +42,7 @@ class FipAuditReport(Report):
         "so long-idle allocations surface at the top. Top-N chart of projects "
         "holding the most unbound FIPs."
     )
+    category = "Capacity"
     params = [
         Param(name="older_than", label="Older than (days)", kind="int",
               default=0, placeholder="0",
@@ -53,7 +54,7 @@ class FipAuditReport(Report):
               choices=_region_choices,
               help="Which regions to span. Empty = all configured regions."),
         Param(name="top", label="Top N (chart)", kind="int", default=20,
-              placeholder="20",
+              placeholder="20", advanced=True,
               help="Projects in the top-N chart. Table always shows everything."),
     ]
 

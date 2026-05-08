@@ -194,6 +194,7 @@ class FipSubnetsReport(Report):
         "pool range) with CIDR, gateway, range bounds, used vs. free. "
         "Per-region TOTAL row at the bottom of each region's section."
     )
+    category = "Capacity"
     params = [
         Param(name="regions", label="Regions", kind="multiselect",
               choices=_region_choices,

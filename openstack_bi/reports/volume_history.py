@@ -30,6 +30,7 @@ class VolumeHistoryReport(Report):
         "Each attachment row shows which instance the volume was bound to, "
         "when it attached, when (or if) it detached, and on which host."
     )
+    category = "Lifecycle"
     params = [
         Param(name="volume_uuid", label="Volume UUID", kind="string",
               required=True, placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",

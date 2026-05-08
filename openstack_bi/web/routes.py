@@ -90,6 +90,7 @@ def run_report(report_id: str):
     visible_columns = (
         [(k, label) for k, label in (result.columns if result else []) if not label.startswith("_")]
     )
+    numeric_cols = _detect_numeric_cols(result, visible_columns) if result else set()
 
     return render_template(
         "report.html",
@@ -102,11 +103,39 @@ def run_report(report_id: str):
         grouped=grouped,
         group_order=group_order,
         visible_columns=visible_columns,
+        numeric_cols=numeric_cols,
         charts_json=json.dumps(
             [_chart_to_json(c) for c in (result.charts if result else [])]
         ),
         query_string=request.query_string.decode("ascii"),
     )
+
+
+def _detect_numeric_cols(result: ReportResult, visible_columns) -> set:
+    """Identify columns whose sampled values are all int/float (not bool).
+
+    The web template right-aligns these and renders them with tabular figures
+    so counts/sizes scan cleanly. Severity/status columns are skipped — they
+    render as badges, not numbers.
+    """
+    numeric: set = set()
+    sample_size = 20
+    for key, _ in visible_columns:
+        if key in ("severity", "status"):
+            continue
+        seen_any = False
+        all_numeric = True
+        for row in result.rows[:sample_size]:
+            value = row.get(key)
+            if value is None:
+                continue
+            seen_any = True
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                all_numeric = False
+                break
+        if seen_any and all_numeric:
+            numeric.add(key)
+    return numeric
 
 
 def export_report(report_id: str):
