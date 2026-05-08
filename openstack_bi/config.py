@@ -58,7 +58,25 @@ class Region:
 
 
 def _suffix(name: str) -> str:
+    """Canonical env-var suffix: uppercase, non-alphanumerics → underscore.
+
+    This is the documented form (e.g. `us-east-2` → `US_EAST_2`). Callers
+    should use `_region_suffix_candidates()` when reading env vars — some
+    users write suffixes with the dashes preserved (`US-EAST-2`), and
+    `python-dotenv` happily loads those despite POSIX frowning on them.
+    """
     return re.sub(r"[^A-Z0-9]", "_", name.upper())
+
+
+def _region_suffix_candidates(name: str) -> List[str]:
+    """All suffix spellings to try when looking up per-region env vars.
+
+    Order: documented underscore form first, then any raw-uppercase form
+    that differs (dashes preserved, etc.). Duplicates removed.
+    """
+    canonical = _suffix(name)
+    raw = name.upper()
+    return [canonical] if canonical == raw else [canonical, raw]
 
 
 def _env(var: str, default: Optional[str] = None) -> Optional[str]:
@@ -67,9 +85,15 @@ def _env(var: str, default: Optional[str] = None) -> Optional[str]:
 
 
 def _region_var(region_name: str, base: str, default: Optional[str]) -> Optional[str]:
-    """Read OS_DB_<BASE>__<SUFFIX>, falling back to OS_DB_<BASE> (legacy)."""
-    suf = _suffix(region_name)
-    return _env(f"OS_DB_{base}__{suf}", _env(f"OS_DB_{base}", default))
+    """Read OS_DB_<BASE>__<SUFFIX>, trying both the underscore-normalized
+    suffix and the raw uppercase form, then falling back to the bare
+    OS_DB_<BASE> (legacy single-region form).
+    """
+    for suf in _region_suffix_candidates(region_name):
+        v = _env(f"OS_DB_{base}__{suf}")
+        if v is not None:
+            return v
+    return _env(f"OS_DB_{base}", default)
 
 
 def parse_regions() -> List[Region]:
