@@ -204,67 +204,71 @@
   {% endif %}
 
   {% if result.groupings and grouped %}
-    {% for key in group_order %}
-      <section class="mb-6">
-        <h2 class="text-lg font-semibold border-b border-gray-200 pb-1 mb-2 flex flex-wrap items-center gap-2">
-          {% for grouping_field in result.groupings %}
-            {% if not loop.first %}<span class="text-gray-400">/</span>{% endif %}
-            {{ cell(grouping_field, key[loop.index0]) }}
-          {% endfor %}
-          <span class="text-sm text-gray-500 font-normal ml-2">
-            ({{ grouped[key]|length }} row{{ '' if grouped[key]|length == 1 else 's' }})
-          </span>
-        </h2>
-        <div class="card">
-          <div class="overflow-x-auto">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  {% for col_key, col_label in visible_columns %}
-                    {% if col_key not in result.groupings %}
-                      {{ th_cell(col_key, col_label, numeric_cols) }}
-                    {% endif %}
-                  {% endfor %}
-                </tr>
-              </thead>
-              <tbody>
-                {% for r in grouped[key] %}
+    <div class="results-fullbleed">
+      {% for key in group_order %}
+        <section class="mb-6 px-4 sm:px-6 lg:px-8">
+          <h2 class="text-lg font-semibold border-b border-gray-200 pb-1 mb-2 flex flex-wrap items-center gap-2">
+            {% for grouping_field in result.groupings %}
+              {% if not loop.first %}<span class="text-gray-400">/</span>{% endif %}
+              {{ cell(grouping_field, key[loop.index0]) }}
+            {% endfor %}
+            <span class="text-sm text-gray-500 font-normal ml-2">
+              ({{ grouped[key]|length }} row{{ '' if grouped[key]|length == 1 else 's' }})
+            </span>
+          </h2>
+          <div class="card">
+            <div class="overflow-x-auto">
+              <table class="data-table">
+                <thead>
                   <tr>
-                    {% for col_key, _ in visible_columns %}
+                    {% for col_key, col_label in visible_columns %}
                       {% if col_key not in result.groupings %}
-                        {{ td_cell(col_key, r[col_key], numeric_cols, r) }}
+                        {{ th_cell(col_key, col_label, numeric_cols) }}
                       {% endif %}
                     {% endfor %}
                   </tr>
-                {% endfor %}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {% for r in grouped[key] %}
+                    <tr>
+                      {% for col_key, _ in visible_columns %}
+                        {% if col_key not in result.groupings %}
+                          {{ td_cell(col_key, r[col_key], numeric_cols, r) }}
+                        {% endif %}
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      </section>
-    {% endfor %}
+        </section>
+      {% endfor %}
+    </div>
   {% elif result.rows %}
-    <div class="card">
-      <div class="overflow-x-auto">
-        <table class="data-table">
-          <thead>
-            <tr>
-              {% for col_key, col_label in visible_columns %}
-                {{ th_cell(col_key, col_label, numeric_cols) }}
-              {% endfor %}
-            </tr>
-          </thead>
-          <tbody>
-            {% for r in result.rows %}
-              {% set sev = row_severity(r) %}
-              <tr{% if sev %} data-severity="{{ sev }}"{% endif %}>
-                {% for col_key, _ in visible_columns %}
-                  {{ td_cell(col_key, r[col_key], numeric_cols, r) }}
+    <div class="results-fullbleed px-4 sm:px-6 lg:px-8">
+      <div class="card">
+        <div class="overflow-x-auto">
+          <table class="data-table">
+            <thead>
+              <tr>
+                {% for col_key, col_label in visible_columns %}
+                  {{ th_cell(col_key, col_label, numeric_cols) }}
                 {% endfor %}
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {% for r in result.rows %}
+                {% set sev = row_severity(r) %}
+                <tr{% if sev %} data-severity="{{ sev }}"{% endif %}>
+                  {% for col_key, _ in visible_columns %}
+                    {{ td_cell(col_key, r[col_key], numeric_cols, r) }}
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   {% else %}
