@@ -62,6 +62,7 @@ class IssuesReport(Report):
         "long-unbound floating IPs, and stale snapshots. Each row is one "
         "finding with severity, project, region, and a hint."
     )
+    category = "Findings"
     params = [
         Param(name="domain", label="Domain", kind="select",
               choices=_domain_choices, default="",
@@ -73,16 +74,16 @@ class IssuesReport(Report):
               default="info", choices=_severity_choices,
               help="Hide findings below this severity."),
         Param(name="stuck_hours", label="Stuck (hours)", kind="int", default=6,
-              placeholder="6",
+              placeholder="6", advanced=True,
               help="task_state / volume transient threshold in hours."),
         Param(name="orphan_days", label="Orphan (days)", kind="int", default=60,
-              placeholder="60",
+              placeholder="60", advanced=True,
               help="Available+unattached volume age threshold."),
         Param(name="fip_days", label="Unbound FIP (days)", kind="int", default=30,
-              placeholder="30",
+              placeholder="30", advanced=True,
               help="Unbound floating IP age threshold."),
         Param(name="snapshot_days", label="Snapshot (days)", kind="int", default=180,
-              placeholder="180",
+              placeholder="180", advanced=True,
               help="Snapshot age threshold flagged as stale."),
     ]
 

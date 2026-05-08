@@ -1,0 +1,265 @@
+/* ============================================================================
+   Ops BI overlay — additions on top of rvt-analyzer's app.css/dark-mode.css.
+   Kept separate so the upstream files can be re-synced verbatim.
+   ============================================================================ */
+
+/* Severity / status badges. Values come from the report code; class names
+   are derived in report.html via lower() + replace(' '|'_' -> '-'). */
+
+.badge-status-critical,
+.badge-status-error,
+.badge-status-down,
+.badge-status-error-deleting,
+.badge-status-warn,
+.badge-status-warning,
+.badge-status-near-full,
+.badge-status-deleting,
+.badge-status-building,
+.badge-status-in-use,
+.badge-status-attached,
+.badge-status-info,
+.badge-status-no-declared-pool,
+.badge-status-ok,
+.badge-status-active,
+.badge-status-available,
+.badge-status-up {
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+/* ---------- Light mode ---------- */
+.badge-status-critical {
+    background-color: #FEE2E2;
+    color: #991B1B;
+    border-color: rgba(220, 38, 38, 0.35);
+}
+.badge-status-error,
+.badge-status-down,
+.badge-status-error-deleting {
+    background-color: #FEE2E2;
+    color: #B91C1C;
+    border-color: rgba(220, 38, 38, 0.25);
+}
+.badge-status-warn,
+.badge-status-warning,
+.badge-status-near-full,
+.badge-status-deleting,
+.badge-status-building,
+.badge-status-in-use,
+.badge-status-attached {
+    background-color: #FEF3C7;
+    color: #92400E;
+    border-color: rgba(217, 119, 6, 0.30);
+}
+.badge-status-info,
+.badge-status-no-declared-pool {
+    background-color: #DBEAFE;
+    color: #1E40AF;
+    border-color: rgba(37, 99, 235, 0.25);
+}
+.badge-status-ok,
+.badge-status-active,
+.badge-status-available,
+.badge-status-up {
+    background-color: #D1FAE5;
+    color: #065F46;
+    border-color: rgba(5, 150, 105, 0.30);
+}
+
+/* ---------- Dark mode glow ---------- */
+[data-theme="dark"] .badge-status-critical {
+    background-color: rgba(255, 82, 82, 0.16);
+    color: #ff8a8a;
+    border-color: rgba(255, 82, 82, 0.5);
+    box-shadow: 0 0 14px rgba(255, 82, 82, 0.45),
+                inset 0 0 0 1px rgba(255, 82, 82, 0.25);
+    text-shadow: 0 0 8px rgba(255, 82, 82, 0.6);
+    animation: ops-bi-pulse-critical 2.4s ease-in-out infinite;
+}
+
+[data-theme="dark"] .badge-status-error,
+[data-theme="dark"] .badge-status-down,
+[data-theme="dark"] .badge-status-error-deleting {
+    background-color: rgba(255, 82, 82, 0.13);
+    color: #ff9a9a;
+    border-color: rgba(255, 82, 82, 0.35);
+    box-shadow: 0 0 12px rgba(255, 82, 82, 0.30);
+    text-shadow: 0 0 6px rgba(255, 82, 82, 0.4);
+}
+
+[data-theme="dark"] .badge-status-warn,
+[data-theme="dark"] .badge-status-warning,
+[data-theme="dark"] .badge-status-near-full,
+[data-theme="dark"] .badge-status-deleting,
+[data-theme="dark"] .badge-status-building,
+[data-theme="dark"] .badge-status-in-use,
+[data-theme="dark"] .badge-status-attached {
+    background-color: rgba(255, 179, 0, 0.14);
+    color: #ffd166;
+    border-color: rgba(255, 179, 0, 0.4);
+    box-shadow: 0 0 12px rgba(255, 179, 0, 0.30);
+    text-shadow: 0 0 6px rgba(255, 179, 0, 0.4);
+}
+
+[data-theme="dark"] .badge-status-info,
+[data-theme="dark"] .badge-status-no-declared-pool {
+    background-color: rgba(0, 212, 255, 0.12);
+    color: #66e0ff;
+    border-color: rgba(0, 212, 255, 0.4);
+    box-shadow: 0 0 12px rgba(0, 212, 255, 0.30);
+    text-shadow: 0 0 6px rgba(0, 212, 255, 0.4);
+}
+
+[data-theme="dark"] .badge-status-ok,
+[data-theme="dark"] .badge-status-active,
+[data-theme="dark"] .badge-status-available,
+[data-theme="dark"] .badge-status-up {
+    background-color: rgba(0, 230, 118, 0.14);
+    color: #6ee7b7;
+    border-color: rgba(0, 230, 118, 0.4);
+    box-shadow: 0 0 12px rgba(0, 230, 118, 0.30);
+    text-shadow: 0 0 6px rgba(0, 230, 118, 0.4);
+}
+
+@keyframes ops-bi-pulse-critical {
+    0%, 100% {
+        box-shadow: 0 0 14px rgba(255, 82, 82, 0.45),
+                    inset 0 0 0 1px rgba(255, 82, 82, 0.25);
+    }
+    50% {
+        box-shadow: 0 0 22px rgba(255, 82, 82, 0.75),
+                    inset 0 0 0 1px rgba(255, 82, 82, 0.45);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    [data-theme="dark"] .badge-status-critical {
+        animation: none;
+    }
+}
+
+/* ============================================================================
+   Severity row tint (flat tables only)
+   ============================================================================ */
+
+/* Inset accent bar via box-shadow (avoids layout shift with border-collapse). */
+.data-table tbody tr[data-severity="critical"] td:first-child,
+.data-table tbody tr[data-severity="error"] td:first-child,
+.data-table tbody tr[data-severity="down"] td:first-child,
+.data-table tbody tr[data-severity="error-deleting"] td:first-child {
+    box-shadow: inset 3px 0 0 #DC2626;
+}
+.data-table tbody tr[data-severity="warn"] td:first-child,
+.data-table tbody tr[data-severity="warning"] td:first-child,
+.data-table tbody tr[data-severity="near-full"] td:first-child {
+    box-shadow: inset 3px 0 0 #D97706;
+}
+
+/* Light-mode subtle row backgrounds. */
+.data-table tbody tr[data-severity="critical"] td,
+.data-table tbody tr[data-severity="error"] td,
+.data-table tbody tr[data-severity="down"] td,
+.data-table tbody tr[data-severity="error-deleting"] td {
+    background-color: rgba(220, 38, 38, 0.05);
+}
+.data-table tbody tr[data-severity="warn"] td,
+.data-table tbody tr[data-severity="warning"] td,
+.data-table tbody tr[data-severity="near-full"] td {
+    background-color: rgba(217, 119, 6, 0.06);
+}
+.data-table tbody tr[data-severity="critical"]:hover td,
+.data-table tbody tr[data-severity="error"]:hover td,
+.data-table tbody tr[data-severity="down"]:hover td,
+.data-table tbody tr[data-severity="error-deleting"]:hover td {
+    background-color: rgba(220, 38, 38, 0.10);
+}
+.data-table tbody tr[data-severity="warn"]:hover td,
+.data-table tbody tr[data-severity="warning"]:hover td,
+.data-table tbody tr[data-severity="near-full"]:hover td {
+    background-color: rgba(217, 119, 6, 0.12);
+}
+
+/* Dark-mode row backgrounds and accent. */
+[data-theme="dark"] .data-table tbody tr[data-severity="critical"] td:first-child,
+[data-theme="dark"] .data-table tbody tr[data-severity="error"] td:first-child,
+[data-theme="dark"] .data-table tbody tr[data-severity="down"] td:first-child,
+[data-theme="dark"] .data-table tbody tr[data-severity="error-deleting"] td:first-child {
+    box-shadow: inset 3px 0 0 #ff5252;
+}
+[data-theme="dark"] .data-table tbody tr[data-severity="warn"] td:first-child,
+[data-theme="dark"] .data-table tbody tr[data-severity="warning"] td:first-child,
+[data-theme="dark"] .data-table tbody tr[data-severity="near-full"] td:first-child {
+    box-shadow: inset 3px 0 0 #ffb300;
+}
+[data-theme="dark"] .data-table tbody tr[data-severity="critical"] td,
+[data-theme="dark"] .data-table tbody tr[data-severity="error"] td,
+[data-theme="dark"] .data-table tbody tr[data-severity="down"] td,
+[data-theme="dark"] .data-table tbody tr[data-severity="error-deleting"] td {
+    background-color: rgba(255, 82, 82, 0.10);
+}
+[data-theme="dark"] .data-table tbody tr[data-severity="warn"] td,
+[data-theme="dark"] .data-table tbody tr[data-severity="warning"] td,
+[data-theme="dark"] .data-table tbody tr[data-severity="near-full"] td {
+    background-color: rgba(255, 179, 0, 0.10);
+}
+[data-theme="dark"] .data-table tbody tr[data-severity="critical"]:hover td,
+[data-theme="dark"] .data-table tbody tr[data-severity="error"]:hover td,
+[data-theme="dark"] .data-table tbody tr[data-severity="down"]:hover td,
+[data-theme="dark"] .data-table tbody tr[data-severity="error-deleting"]:hover td {
+    background-color: rgba(255, 82, 82, 0.18);
+}
+[data-theme="dark"] .data-table tbody tr[data-severity="warn"]:hover td,
+[data-theme="dark"] .data-table tbody tr[data-severity="warning"]:hover td,
+[data-theme="dark"] .data-table tbody tr[data-severity="near-full"]:hover td {
+    background-color: rgba(255, 179, 0, 0.18);
+}
+
+/* ============================================================================
+   Sticky table headers + sort affordances
+   ============================================================================ */
+
+.data-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background-color: #f9fafb;
+}
+[data-theme="dark"] .data-table thead th {
+    background-color: var(--bg-elevated);
+}
+
+/* Right-aligned numeric headers must keep room for the sort icon at the right
+   edge. The base .sortable rule pads 1.5rem; with text-right we bump it so the
+   label doesn't overlap the icon. */
+.data-table th.sortable.text-right {
+    padding-right: 2rem;
+}
+.data-table th.sortable.text-right > span:first-child {
+    display: inline-block;
+}
+
+/* ============================================================================
+   Stat card label/value tweaks for the metadata strip
+   ============================================================================ */
+
+.stat-card .stat-value {
+    line-height: 1.25;
+}
+.stat-card .stat-label {
+    margin-bottom: 0.25rem;
+}
+
+/* ============================================================================
+   Empty state
+   ============================================================================ */
+
+.empty-state svg {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 1rem;
+    color: var(--text-tertiary, #9ca3af);
+}
+.empty-state p {
+    margin: 0.25rem 0;
+}

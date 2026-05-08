@@ -6,163 +6,366 @@
   {% endif %}
 {% endblock %}
 
+{% macro cell(col_key, value) -%}
+  {%- if value is none -%}
+    -
+  {%- elif col_key in ('severity', 'status') -%}
+    {%- set slug = value|string|lower|trim|replace(' ', '-')|replace('_', '-') -%}
+    <span class="badge badge-status-{{ slug }}">{{ value }}</span>
+  {%- else -%}
+    {{ value }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro row_severity(r) -%}
+  {%- set raw = r.get('severity') or r.get('status') -%}
+  {%- if raw -%}
+    {{ raw|string|lower|trim|replace(' ', '-')|replace('_', '-') }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro th_cell(col_key, col_label, numeric_cols) -%}
+  {%- set is_num = col_key in numeric_cols -%}
+  {%- set classes = ['sortable'] -%}
+  {%- if is_num %}{% set _ = classes.append('text-right') %}{% set _ = classes.append('tabular-nums') %}{% set _ = classes.append('whitespace-nowrap') %}{% endif -%}
+  <th class="{{ classes|join(' ') }}"
+      data-col-key="{{ col_key }}"
+      data-numeric="{{ '1' if is_num else '0' }}">
+    <span>{{ col_label }}</span>
+    <span class="sort-icon">▲▼</span>
+  </th>
+{%- endmacro %}
+
+{% macro td_cell(col_key, value, numeric_cols) -%}
+  {%- set classes = [] -%}
+  {%- if col_key == 'uuid' %}{% set _ = classes.append('font-mono') %}{% set _ = classes.append('text-xs') %}{% set _ = classes.append('text-gray-500') %}{% endif -%}
+  {%- if col_key in ('last_action_time', 'age', 'created_at') %}{% set _ = classes.append('whitespace-nowrap') %}{% endif -%}
+  {%- if col_key in numeric_cols %}{% set _ = classes.append('text-right') %}{% set _ = classes.append('tabular-nums') %}{% set _ = classes.append('whitespace-nowrap') %}{% endif -%}
+  <td{% if classes %} class="{{ classes|join(' ') }}"{% endif %}>{{ cell(col_key, value) }}</td>
+{%- endmacro %}
+
 {% macro field(p, values, choices) -%}
   {% if p.kind == 'select' %}
-    <label class="field">{{ p.label }}
-      <select name="{{ p.name }}" {% if p.required %}required{% endif %}>
+    <div class="form-group">
+      <label class="form-label">{{ p.label }}</label>
+      <select class="form-select" name="{{ p.name }}" {% if p.required %}required{% endif %}>
         {% if not p.required %}<option value=""></option>{% endif %}
         {% for value, label in choices %}
           <option value="{{ value }}" {% if values[p.name] == value %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
-    </label>
+    </div>
   {% elif p.kind == 'multiselect' %}
-    <fieldset class="multiselect">
-      <legend>{{ p.label }}</legend>
-      {% for value, label in choices %}
-        <label>
-          <input type="checkbox" name="{{ p.name }}" value="{{ value }}"
-                 {% if value in values[p.name] %}checked{% endif %}>
-          {{ label }}
-        </label>
-      {% endfor %}
+    <fieldset class="card card-body">
+      <legend class="form-label px-1">{{ p.label }}</legend>
+      <div class="flex flex-wrap gap-x-3 gap-y-1">
+        {% for value, label in choices %}
+          <label class="inline-flex items-center gap-1 text-sm">
+            <input type="checkbox" name="{{ p.name }}" value="{{ value }}"
+                   {% if value in values[p.name] %}checked{% endif %}>
+            {{ label }}
+          </label>
+        {% endfor %}
+      </div>
     </fieldset>
   {% elif p.kind == 'int' %}
-    <label class="field">{{ p.label }}
-      <input type="number" name="{{ p.name }}" min="0"
+    <div class="form-group">
+      <label class="form-label">{{ p.label }}</label>
+      <input class="form-input" type="number" name="{{ p.name }}" min="0"
              value="{{ values[p.name] if values[p.name] != None else '' }}"
              {% if p.placeholder %}placeholder="{{ p.placeholder }}"{% endif %}>
-    </label>
+    </div>
   {% elif p.kind == 'date' %}
-    <label class="field">{{ p.label }}
-      <input type="date" name="{{ p.name }}" value="{{ values[p.name] or '' }}">
-    </label>
+    <div class="form-group">
+      <label class="form-label">{{ p.label }}</label>
+      <input class="form-input" type="date" name="{{ p.name }}" value="{{ values[p.name] or '' }}">
+    </div>
   {% elif p.kind == 'bool' %}
-    <label class="field" style="flex-direction: row; align-items: center; gap: 0.3rem;">
-      <input type="checkbox" name="{{ p.name }}" value="1" {% if values[p.name] %}checked{% endif %}>
-      {{ p.label }}
-    </label>
+    <div class="form-group">
+      <label class="inline-flex items-center gap-2 text-sm">
+        <input type="checkbox" name="{{ p.name }}" value="1" {% if values[p.name] %}checked{% endif %}>
+        {{ p.label }}
+      </label>
+    </div>
   {% else %}
-    <label class="field">{{ p.label }}
-      <input type="text" name="{{ p.name }}" value="{{ values[p.name] or '' }}"
+    <div class="form-group">
+      <label class="form-label">{{ p.label }}</label>
+      <input class="form-input" type="text" name="{{ p.name }}" value="{{ values[p.name] or '' }}"
              {% if p.placeholder %}placeholder="{{ p.placeholder }}"{% endif %}>
-    </label>
+    </div>
   {% endif %}
 {%- endmacro %}
 
 {% block content %}
-<h1>{{ report.name }}</h1>
-<p class="meta">{{ report.description }}</p>
+<h1 class="text-2xl font-semibold mb-1">{{ report.name }}</h1>
+<p class="text-gray-600 mb-4">{{ report.description }}</p>
 
-<form method="get" action="{{ url_for('run_report', report_id=report.id) }}">
-  {% for p in report.params %}
-    {{ field(p, values, param_choices[p.name]) }}
-  {% endfor %}
-  <button type="submit">Run report</button>
-  {% if result and not error %}
-    <a class="btn"
-       href="{{ url_for('export_report', report_id=report.id) }}?{{ query_string }}">
-      Download Excel
-    </a>
+{% set primary_params = report.params|rejectattr('advanced')|list %}
+{% set advanced_params = report.params|selectattr('advanced')|list %}
+{% set advanced_dirty = namespace(any=false) %}
+{% for p in advanced_params %}
+  {% if values[p.name] not in (None, '', []) and values[p.name] != p.default %}
+    {% set advanced_dirty.any = true %}
   {% endif %}
+{% endfor %}
+
+<form method="get" action="{{ url_for('run_report', report_id=report.id) }}" class="card card-body mb-6">
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% for p in primary_params %}
+      {{ field(p, values, param_choices[p.name]) }}
+    {% endfor %}
+  </div>
+
+  {% if advanced_params %}
+    <details class="mt-4 border-t border-gray-200 pt-4" {% if advanced_dirty.any %}open{% endif %}>
+      <summary class="cursor-pointer font-medium text-sm">Advanced options</summary>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-3">
+        {% for p in advanced_params %}
+          {{ field(p, values, param_choices[p.name]) }}
+        {% endfor %}
+      </div>
+    </details>
+  {% endif %}
+
+  <div class="flex flex-wrap gap-2 mt-4">
+    <button type="submit" class="btn btn-primary">Run report</button>
+    {% if result and not error %}
+      <a class="btn btn-outline"
+         href="{{ url_for('export_report', report_id=report.id) }}?{{ query_string }}">
+        Download Excel
+      </a>
+    {% endif %}
+  </div>
 </form>
 
 {% if error %}
-  <div class="error">{{ error }}</div>
+  <div class="bg-red-50 border border-red-300 text-red-800 rounded p-3 mb-4">{{ error }}</div>
 {% endif %}
 
 {% if result and not error %}
   {% set region_errors = result.metadata.get('region_errors') %}
   {% if region_errors and region_errors != '(none)' %}
-    <div class="warning">
+    <div class="bg-yellow-50 border border-yellow-300 text-yellow-800 rounded p-3 mb-4">
       <strong>Region errors:</strong> {{ region_errors }}
-      <br><small>Results below reflect only the regions that responded.</small>
+      <div class="text-xs mt-1 opacity-80">Results below reflect only the regions that responded.</div>
     </div>
   {% endif %}
-  <div class="meta">
-    {% for key, value in result.metadata.items() %}
-      {% if key != 'region_errors' %}
-        <strong>{{ key }}:</strong> {{ value }} &nbsp;·&nbsp;
-      {% endif %}
-    {% endfor %}
-  </div>
+
+  {% set meta_keys = [] %}
+  {% for key in result.metadata.keys() %}
+    {% if key != 'region_errors' %}{% set _ = meta_keys.append(key) %}{% endif %}
+  {% endfor %}
+  {% if meta_keys %}
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
+      {% for key in meta_keys %}
+        {% set value = result.metadata[key] %}
+        <div class="stat-card">
+          <div class="stat-label uppercase tracking-wide text-xs">{{ key|replace('_', ' ') }}</div>
+          <div class="stat-value text-base font-semibold break-words" title="{{ value }}">
+            {{ value if value not in (None, '') else '—' }}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
 
   {% if result.charts %}
     {% for c in result.charts %}
-      <div class="chart-wrap">
-        <canvas id="chart-{{ loop.index0 }}"></canvas>
+      <div class="card card-body mb-4">
+        <canvas id="chart-{{ loop.index0 }}" class="w-full h-auto"></canvas>
       </div>
     {% endfor %}
   {% endif %}
 
   {% if result.groupings and grouped %}
     {% for key in group_order %}
-      <section class="group">
-        <h2>
-          {{ key | map('string') | join(' / ') }}
-          <span class="count">({{ grouped[key]|length }} row{{ '' if grouped[key]|length == 1 else 's' }})</span>
+      <section class="mb-6">
+        <h2 class="text-lg font-semibold border-b border-gray-200 pb-1 mb-2 flex flex-wrap items-center gap-2">
+          {% for grouping_field in result.groupings %}
+            {% if not loop.first %}<span class="text-gray-400">/</span>{% endif %}
+            {{ cell(grouping_field, key[loop.index0]) }}
+          {% endfor %}
+          <span class="text-sm text-gray-500 font-normal ml-2">
+            ({{ grouped[key]|length }} row{{ '' if grouped[key]|length == 1 else 's' }})
+          </span>
         </h2>
-        <table>
+        <div class="card">
+          <div class="overflow-x-auto">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  {% for col_key, col_label in visible_columns %}
+                    {% if col_key not in result.groupings %}
+                      {{ th_cell(col_key, col_label, numeric_cols) }}
+                    {% endif %}
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in grouped[key] %}
+                  <tr>
+                    {% for col_key, _ in visible_columns %}
+                      {% if col_key not in result.groupings %}
+                        {{ td_cell(col_key, r[col_key], numeric_cols) }}
+                      {% endif %}
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    {% endfor %}
+  {% elif result.rows %}
+    <div class="card">
+      <div class="overflow-x-auto">
+        <table class="data-table">
           <thead>
             <tr>
               {% for col_key, col_label in visible_columns %}
-                {% if col_key not in result.groupings %}
-                  <th>{{ col_label }}</th>
-                {% endif %}
+                {{ th_cell(col_key, col_label, numeric_cols) }}
               {% endfor %}
             </tr>
           </thead>
           <tbody>
-            {% for r in grouped[key] %}
-              <tr>
+            {% for r in result.rows %}
+              {% set sev = row_severity(r) %}
+              <tr{% if sev %} data-severity="{{ sev }}"{% endif %}>
                 {% for col_key, _ in visible_columns %}
-                  {% if col_key not in result.groupings %}
-                    <td class="{% if col_key == 'uuid' %}uuid{% endif %}{% if col_key in ('last_action_time', 'age', 'created_at') %} nowrap{% endif %}">
-                      {{ r[col_key] if r[col_key] is not none else '-' }}
-                    </td>
-                  {% endif %}
+                  {{ td_cell(col_key, r[col_key], numeric_cols) }}
                 {% endfor %}
               </tr>
             {% endfor %}
           </tbody>
         </table>
-      </section>
-    {% endfor %}
-  {% elif result.rows %}
-    <table>
-      <thead>
-        <tr>
-          {% for _, col_label in visible_columns %}<th>{{ col_label }}</th>{% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in result.rows %}
-          <tr>
-            {% for col_key, _ in visible_columns %}
-              <td>{{ r[col_key] if r[col_key] is not none else '-' }}</td>
-            {% endfor %}
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+      </div>
+    </div>
   {% else %}
-    <div class="empty">No rows.</div>
+    <div class="empty-state">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M2.25 13.5h3.86a2.25 2.25 0 012.012 1.244l.256.512a2.25 2.25 0 002.013 1.244h3.218a2.25 2.25 0 002.013-1.244l.256-.512a2.25 2.25 0 012.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 00-2.15-1.588H6.91a2.25 2.25 0 00-2.15 1.588L2.35 13.177a2.25 2.25 0 00-.1.661z"/>
+      </svg>
+      <p class="text-lg font-medium">No matching results.</p>
+      <p class="text-sm">Try adjusting filters above.</p>
+      {% set has_int = report.params|selectattr('kind', 'equalto', 'int')|list %}
+      {% set has_multiselect = report.params|selectattr('kind', 'equalto', 'multiselect')|list %}
+      {% if has_int or has_multiselect %}
+        <p class="text-xs mt-1 opacity-80">
+          {% if has_int %}Loosen numeric thresholds{% endif %}
+          {% if has_int and has_multiselect %} or {% endif %}
+          {% if has_multiselect %}broaden region/domain selection{% endif %}.
+        </p>
+      {% endif %}
+    </div>
   {% endif %}
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
+<script>
+(function () {
+  // Per-table sorting. Each <table.data-table> gets its own click-to-sort
+  // behavior so grouped sections (one table per group) sort independently.
+  document.querySelectorAll('table.data-table').forEach(function (table) {
+    var thead = table.tHead;
+    if (!thead) return;
+    var headers = thead.querySelectorAll('th.sortable');
+    headers.forEach(function (th, idx) {
+      th.addEventListener('click', function () {
+        var asc = !th.classList.contains('sort-asc');
+        headers.forEach(function (h) {
+          h.classList.remove('sort-asc', 'sort-desc');
+          h.removeAttribute('aria-sort');
+        });
+        th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+        th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+        var numeric = th.dataset.numeric === '1';
+        var tbody = table.tBodies[0];
+        if (!tbody) return;
+        var rows = Array.prototype.slice.call(tbody.children);
+        rows.sort(function (a, b) {
+          var av = (a.cells[idx] && a.cells[idx].textContent || '').trim();
+          var bv = (b.cells[idx] && b.cells[idx].textContent || '').trim();
+          if (numeric) {
+            var an = parseFloat(av.replace(/[, ]/g, ''));
+            var bn = parseFloat(bv.replace(/[, ]/g, ''));
+            if (isNaN(an) && isNaN(bn)) return 0;
+            if (isNaN(an)) return 1;
+            if (isNaN(bn)) return -1;
+            return asc ? an - bn : bn - an;
+          }
+          return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  });
+})();
+</script>
 {% if result and result.charts %}
 <script>
 (function(){
-  const charts = {{ charts_json | safe }};
-  charts.forEach((spec, idx) => {
-    const el = document.getElementById('chart-' + idx);
+  var PALETTES = {
+    light: {
+      color: '#1f2937',
+      grid: 'rgba(0,0,0,0.08)',
+      border: 'rgba(0,0,0,0.15)',
+      series: ['#1E3A5F', '#4A90A4', '#0e7490', '#b45309', '#7c3aed', '#15803d', '#be123c', '#0369a1']
+    },
+    dark: {
+      color: '#e5e7eb',
+      grid: 'rgba(255,255,255,0.08)',
+      border: 'rgba(255,255,255,0.15)',
+      series: ['#22d3ee', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#60a5fa', '#f472b6', '#2dd4bf']
+    }
+  };
+
+  function currentTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  }
+
+  function applyDefaults(theme) {
+    if (typeof Chart === 'undefined') return;
+    var p = PALETTES[theme];
+    Chart.defaults.color = p.color;
+    Chart.defaults.borderColor = p.border;
+  }
+
+  function paintInstance(chart, theme) {
+    var p = PALETTES[theme];
+    (chart.data.datasets || []).forEach(function (ds, i) {
+      var c = p.series[i % p.series.length];
+      ds.backgroundColor = c;
+      ds.borderColor = c;
+    });
+    if (chart.options) {
+      chart.options.scales = chart.options.scales || {};
+      ['x', 'y'].forEach(function (axis) {
+        chart.options.scales[axis] = chart.options.scales[axis] || {};
+        chart.options.scales[axis].ticks = Object.assign({}, chart.options.scales[axis].ticks || {}, {color: p.color});
+        chart.options.scales[axis].grid = Object.assign({}, chart.options.scales[axis].grid || {}, {color: p.grid});
+        chart.options.scales[axis].title = Object.assign({}, chart.options.scales[axis].title || {}, {color: p.color});
+      });
+      chart.options.plugins = chart.options.plugins || {};
+      chart.options.plugins.title = Object.assign({}, chart.options.plugins.title || {}, {color: p.color});
+      chart.options.plugins.legend = chart.options.plugins.legend || {};
+      chart.options.plugins.legend.labels = Object.assign({}, chart.options.plugins.legend.labels || {}, {color: p.color});
+    }
+  }
+
+  var instances = [];
+  var theme = currentTheme();
+  applyDefaults(theme);
+
+  var charts = {{ charts_json | safe }};
+  charts.forEach(function (spec, idx) {
+    var el = document.getElementById('chart-' + idx);
     if (!el) return;
-    const type = spec.kind === 'line' ? 'line'
-      : spec.kind === 'stacked_bar' ? 'bar' : 'bar';
-    const datasets = spec.series.map(s => ({ label: s.label, data: s.data }));
-    const cfg = {
+    var type = spec.kind === 'line' ? 'line' : 'bar';
+    var datasets = spec.series.map(function (s) { return { label: s.label, data: s.data }; });
+    var cfg = {
       type: type,
       data: { labels: spec.x_categories, datasets: datasets },
       options: {
@@ -175,8 +378,24 @@
         }
       }
     };
-    new Chart(el, cfg);
+    var chart = new Chart(el, cfg);
+    paintInstance(chart, theme);
+    chart.update('none');
+    instances.push(chart);
   });
+
+  // Re-color charts when the theme changes mid-session.
+  // MutationObserver fires regardless of whether localStorage was the
+  // trigger; storage events would not fire in the same tab.
+  var observer = new MutationObserver(function () {
+    var t = currentTheme();
+    applyDefaults(t);
+    instances.forEach(function (c) {
+      paintInstance(c, t);
+      c.update('none');
+    });
+  });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 })();
 </script>
 {% endif %}

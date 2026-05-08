@@ -26,6 +26,7 @@ class InstanceHistoryReport(Report):
         "every region and cell. Each action row shows duration, user, "
         "request-id, message, event count, and the most recent event name."
     )
+    category = "Lifecycle"
     params = [
         Param(name="instance_uuid", label="Instance UUID", kind="string",
               required=True, placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",

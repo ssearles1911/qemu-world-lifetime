@@ -41,6 +41,7 @@ class StaleSnapshotsReport(Report):
         "Optionally scoped to a single project or domain. "
         "Sorted oldest-first; totals per project are in the metadata."
     )
+    category = "Capacity"
     params = [
         Param(name="days", label="Older than (days)", kind="int",
               default=90, placeholder="90",

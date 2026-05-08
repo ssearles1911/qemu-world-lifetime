@@ -93,6 +93,7 @@ class ProjectGrowthReport(Report):
         "`instances.created_at` / `deleted_at`. Line chart for the top-N "
         "projects plus aggregated 'other'; table shows start vs. end of range."
     )
+    category = "Projects"
     params = [
         Param(name="domain", label="Domain", kind="select", required=True,
               choices=_domain_choices,
@@ -104,7 +105,7 @@ class ProjectGrowthReport(Report):
               default=12, placeholder="12",
               help="How many months back from today to include."),
         Param(name="top", label="Top N projects (chart)", kind="int",
-              default=10, placeholder="10",
+              default=10, placeholder="10", advanced=True,
               help="Individual series for the top-N; rest aggregated as 'other'. 0 = single total."),
         Param(name="regions", label="Regions", kind="multiselect",
               choices=_region_choices,

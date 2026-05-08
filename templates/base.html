@@ -1,122 +1,149 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<title>{% block title %}OpenStack Ops BI{% endblock %}</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    margin: 1.5rem;
-    max-width: 1600px;
-  }
-  h1 { margin-top: 0; font-size: 1.4rem; }
-  h2 {
-    font-size: 1.05rem; margin: 0 0 0.4rem 0;
-    border-bottom: 1px solid rgba(127,127,127,0.3); padding-bottom: 0.3rem;
-  }
-  nav {
-    margin-bottom: 1rem; font-size: 0.85rem;
-    color: rgba(127,127,127,1);
-  }
-  nav a { color: inherit; text-decoration: none; margin-right: 0.75rem; }
-  nav a.active { font-weight: 600; color: CanvasText; }
-  form {
-    display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap;
-    padding: 1rem; border-radius: 8px;
-    background: rgba(127,127,127,0.08);
-    margin-bottom: 1.25rem;
-  }
-  form label.field {
-    display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem;
-  }
-  form select, form input[type=number], form input[type=text], form input[type=date],
-  form button, form a.btn {
-    padding: 0.45rem 0.65rem; font-size: 0.95rem; border-radius: 4px;
-    border: 1px solid rgba(127,127,127,0.5);
-    background: inherit; color: inherit;
-  }
-  form select, form select option {
-    background-color: Canvas;
-    color: CanvasText;
-  }
-  form button, form a.btn { cursor: pointer; }
-  form a.btn { text-decoration: none; display: inline-block; }
-  form fieldset.multiselect {
-    margin: 0; padding: 0.35rem 0.6rem; border-radius: 4px;
-    border: 1px solid rgba(127,127,127,0.5);
-    display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;
-  }
-  form fieldset.multiselect legend {
-    font-size: 0.78rem; padding: 0 0.3rem;
-    color: rgba(127,127,127,1);
-  }
-  form fieldset.multiselect label {
-    display: flex; flex-direction: row; align-items: center; gap: 0.25rem;
-    font-size: 0.88rem;
-  }
-  .meta {
-    color: rgba(127,127,127,1); font-size: 0.9rem;
-    margin-bottom: 0.75rem;
-  }
-  .meta small { font-size: 0.78rem; }
-  .report-card {
-    display: block;
-    padding: 0.85rem 1rem;
-    border: 1px solid rgba(127,127,127,0.35);
-    border-radius: 6px;
-    margin-bottom: 0.75rem;
-    color: inherit;
-    text-decoration: none;
-    background: rgba(127,127,127,0.05);
-  }
-  .report-card:hover { background: rgba(127,127,127,0.12); }
-  .report-card h3 { margin: 0 0 0.3rem 0; font-size: 1rem; }
-  .report-card p { margin: 0; font-size: 0.85rem; color: rgba(127,127,127,1); }
-  .group { margin: 1.2rem 0; }
-  .group h2 .count {
-    color: rgba(127,127,127,0.85); font-weight: normal; font-size: 0.85rem;
-    margin-left: 0.4rem;
-  }
-  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
-  th, td {
-    text-align: left; padding: 0.35rem 0.55rem;
-    border-bottom: 1px solid rgba(127,127,127,0.2);
-    vertical-align: top;
-  }
-  th { background: rgba(127,127,127,0.12); }
-  tr:hover td { background: rgba(127,127,127,0.07); }
-  .uuid {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.75rem; color: rgba(127,127,127,0.85);
-  }
-  .empty { color: rgba(127,127,127,0.8); font-style: italic; padding: 0.5rem 0; }
-  .error {
-    color: #b00020; padding: 0.75rem; border: 1px solid #b00020;
-    border-radius: 4px; margin-bottom: 1rem;
-  }
-  .warning {
-    padding: 0.6rem 0.75rem;
-    border: 1px solid #b58900;
-    background: rgba(181, 137, 0, 0.08);
-    border-radius: 4px;
-    margin-bottom: 0.75rem;
-    font-size: 0.9rem;
-  }
-  .warning strong { color: #b58900; }
-  .nowrap { white-space: nowrap; }
-  .chart-wrap { max-width: 900px; margin: 1rem 0; }
-  canvas { max-width: 100%; height: auto; }
-</style>
-{% block head_extra %}{% endblock %}
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>{% block title %}OpenStack Ops BI{% endblock %}</title>
+  <script>
+    (function () {
+      var t = localStorage.getItem('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <script src="https://cdn.tailwindcss.com" onerror="console.error('TailwindCSS CDN failed to load')"></script>
+  <script>
+    if (typeof tailwind !== 'undefined') {
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: '#1E3A5F',
+              secondary: '#4A90A4',
+              accent: '#E8F4F8',
+            }
+          }
+        }
+      };
+    }
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v=2">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dark-mode.css') }}?v=2">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/ops-bi.css') }}?v=2">
+  {% block head_extra %}{% endblock %}
 </head>
-<body>
-  <nav>
-    <a href="{{ url_for('catalog') }}" class="{% if request.endpoint == 'catalog' %}active{% endif %}">
-      Reports
-    </a>
+<body class="bg-gray-100 min-h-screen">
+  <nav id="navbar" class="bg-primary text-white shadow-lg">
+    <div class="max-w-7xl mx-auto px-4">
+      <div class="flex justify-between items-center h-16">
+        <div class="flex items-center space-x-8">
+          <a href="{{ url_for('catalog') }}" class="flex items-center flex-shrink-0">
+            <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Liberty Center One" class="h-8 w-auto">
+          </a>
+          <div class="hidden md:flex space-x-1 lg:space-x-2 items-center">
+            <a href="{{ url_for('catalog') }}"
+               class="nav-link px-3 py-2 rounded-md hover:bg-primary/80 text-sm{% if request.endpoint == 'catalog' %} active{% endif %}">
+              All reports
+            </a>
+            {% set current_id = request.view_args.get('report_id') if request.view_args else None %}
+            <div class="relative" id="reports-dropdown">
+              <button type="button"
+                      id="reports-dropdown-btn"
+                      class="nav-link px-3 py-2 rounded-md hover:bg-primary/80 text-sm flex items-center{% if request.endpoint == 'run_report' %} active{% endif %}"
+                      aria-haspopup="true" aria-expanded="false">
+                Reports
+                <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+              <div id="reports-dropdown-menu"
+                   class="hidden absolute left-0 mt-1 w-72 bg-white rounded-md shadow-lg py-1 z-50 max-h-[28rem] overflow-y-auto">
+                {% for category, items in all_reports_by_category %}
+                  <div class="px-3 pt-2 pb-1 text-[0.65rem] uppercase tracking-wide text-gray-400 font-semibold">{{ category }}</div>
+                  {% for r in items %}
+                    <a href="{{ url_for('run_report', report_id=r.id) }}"
+                       class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100{% if current_id == r.id %} active font-semibold{% endif %}">
+                      {{ r.name }}
+                    </a>
+                  {% endfor %}
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center space-x-2 lg:space-x-4 flex-shrink-0">
+          <button id="theme-toggle" class="theme-toggle" title="Toggle dark mode" type="button">
+            <svg class="moon-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+            </svg>
+            <svg class="sun-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
   </nav>
-  {% block content %}{% endblock %}
+
+  <main class="max-w-7xl mx-auto px-4 py-8">
+    {% block content %}{% endblock %}
+  </main>
+
   {% block scripts %}{% endblock %}
+
+  <script>
+    (function () {
+      var ThemeManager = {
+        init: function () {
+          var saved = localStorage.getItem('theme') || 'dark';
+          this.setTheme(saved);
+          var btn = document.getElementById('theme-toggle');
+          if (btn) {
+            var self = this;
+            btn.addEventListener('click', function () { self.toggleTheme(); });
+          }
+        },
+        getTheme: function () {
+          return document.documentElement.getAttribute('data-theme') || 'dark';
+        },
+        setTheme: function (theme) {
+          document.documentElement.setAttribute('data-theme', theme);
+          localStorage.setItem('theme', theme);
+        },
+        toggleTheme: function () {
+          this.setTheme(this.getTheme() === 'dark' ? 'light' : 'dark');
+        }
+      };
+      document.addEventListener('DOMContentLoaded', function () { ThemeManager.init(); });
+
+      var ReportsDropdown = {
+        init: function () {
+          var btn = document.getElementById('reports-dropdown-btn');
+          var menu = document.getElementById('reports-dropdown-menu');
+          if (!btn || !menu) return;
+          btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var open = menu.classList.toggle('hidden') === false;
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+          });
+          document.addEventListener('click', function () {
+            menu.classList.add('hidden');
+            btn.setAttribute('aria-expanded', 'false');
+          });
+          document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+              menu.classList.add('hidden');
+              btn.setAttribute('aria-expanded', 'false');
+            }
+          });
+          menu.addEventListener('click', function (e) { e.stopPropagation(); });
+        }
+      };
+      document.addEventListener('DOMContentLoaded', function () { ReportsDropdown.init(); });
+    })();
+  </script>
 </body>
 </html>

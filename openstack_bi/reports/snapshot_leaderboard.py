@@ -44,6 +44,7 @@ class SnapshotLeaderboardReport(Report):
         "counts Cinder volume snapshots (with GB total) and Glance snapshot "
         "images. Oldest-snapshot age is surfaced so retention gaps stand out."
     )
+    category = "Projects"
     params = [
         Param(name="domain", label="Domain", kind="select",
               choices=_domain_choices, default="",
@@ -52,7 +53,7 @@ class SnapshotLeaderboardReport(Report):
               choices=_region_choices,
               help="Which regions to span. Empty = all configured regions."),
         Param(name="top", label="Top N (chart)", kind="int", default=20,
-              placeholder="20",
+              placeholder="20", advanced=True,
               help="Projects in the top-N chart. Table always shows everything."),
     ]
 

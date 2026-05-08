@@ -1,12 +1,75 @@
 {% extends "base.html" %}
 {% block title %}Reports — OpenStack Ops BI{% endblock %}
 {% block content %}
-<h1>Reports</h1>
-<p class="meta">Pick a report to run.</p>
-{% for r in reports %}
-  <a class="report-card" href="{{ url_for('run_report', report_id=r.id) }}">
-    <h3>{{ r.name }}</h3>
-    <p>{{ r.description }}</p>
-  </a>
-{% endfor %}
+<h1 class="text-2xl font-semibold mb-2">Reports</h1>
+<p class="text-gray-600 mb-4">Pick a report to run.</p>
+
+<div class="mb-6">
+  <input type="search" id="report-search"
+         class="form-input w-full md:w-1/2"
+         placeholder="Search reports... (press / to focus)"
+         autocomplete="off">
+</div>
+
+<div id="report-sections">
+  {% for category, items in all_reports_by_category %}
+    <section class="report-section mb-8">
+      <h2 class="text-lg font-semibold mb-3 text-gray-700">{{ category }}</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 report-grid">
+        {% for r in items %}
+          <a href="{{ url_for('run_report', report_id=r.id) }}"
+             class="report-card card hover:shadow-md transition-shadow block"
+             data-search-text="{{ (r.name + ' ' + r.description + ' ' + category)|lower }}">
+            <div class="card-body">
+              <h3 class="font-semibold text-lg mb-1">{{ r.name }}</h3>
+              <p class="text-sm text-gray-600">{{ r.description }}</p>
+            </div>
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+  {% endfor %}
+</div>
+
+<p id="report-no-results" class="hidden text-center text-gray-500 py-8">
+  No reports match that search.
+</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var input = document.getElementById('report-search');
+  var sections = document.querySelectorAll('.report-section');
+  var noResults = document.getElementById('report-no-results');
+  if (!input || !sections.length) return;
+
+  function applyFilter() {
+    var q = (input.value || '').trim().toLowerCase();
+    var totalVisible = 0;
+    sections.forEach(function (section) {
+      var cards = section.querySelectorAll('.report-card');
+      var sectionVisible = 0;
+      cards.forEach(function (card) {
+        var match = !q || (card.dataset.searchText || '').indexOf(q) !== -1;
+        card.hidden = !match;
+        if (match) sectionVisible++;
+      });
+      section.hidden = sectionVisible === 0;
+      totalVisible += sectionVisible;
+    });
+    if (noResults) noResults.classList.toggle('hidden', totalVisible > 0);
+  }
+
+  input.addEventListener('input', applyFilter);
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && document.activeElement !== input) {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+})();
+</script>
 {% endblock %}

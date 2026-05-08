@@ -31,6 +31,10 @@ class Param:
     choices: Optional[Callable[[], List[Tuple[str, str]]]] = None
     help: str = ""
     placeholder: str = ""
+    # Tuning knobs whose defaults are usually fine. The web UI hides these
+    # behind a collapsible "Advanced options" panel so the run button stays
+    # in view on reports with many params.
+    advanced: bool = False
 
     def resolve_choices(self) -> List[Tuple[str, str]]:
         if self.choices is None:
@@ -75,6 +79,8 @@ class Report(ABC):
     name: str
     description: str
     params: List[Param]
+    # Used by the web catalog/navbar to group reports.
+    category: str = "General"
 
     @abstractmethod
     def run(self, **kwargs: Any) -> ReportResult:

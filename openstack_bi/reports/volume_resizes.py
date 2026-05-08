@@ -44,6 +44,7 @@ class VolumeResizesReport(Report):
         "Retention in `cinder.messages` can be short — older resizes may "
         "not appear."
     )
+    category = "Lifecycle"
     params = [
         Param(name="days", label="Last (days)", kind="int",
               default=30, placeholder="30",

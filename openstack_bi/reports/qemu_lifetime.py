@@ -144,6 +144,7 @@ class QemuLifetimeReport(Report):
         "event per instance, grouped by project. Filter by domain, state, "
         "min-age days, and region."
     )
+    category = "Lifecycle"
     params = [
         Param(name="domain", label="Domain", kind="select", required=True,
               choices=_domain_choices,
