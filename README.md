@@ -10,9 +10,21 @@ architecture so new reports plug in without touching the CLI or web UI:
   and one-click Excel download. Charts render in-browser via Chart.js and
   are embedded as PNGs in the Excel export.
 
-The first report shipped is **qemu-lifetime** — for every instance in a
-given domain, when was it last started / stopped / shelved / unshelved /
-shelveOffload'd / live-migrated, and how long ago.
+## Reports
+
+| ID | Purpose |
+| --- | --- |
+| `issues` | Cross-service health dashboard (error VMs, stuck states, orphaned volumes, old unbound FIPs, stale snapshots) grouped by severity. |
+| `qemu_lifetime` | Last start/stop/shelve/unshelve/shelveOffload/live-migration per instance, grouped by project. |
+| `instance_leaderboard` | Projects ranked by instance count across regions, broken down by vm_state. |
+| `project_growth` | Per-project concurrent instance count over time, derived from `instances.created_at` / `deleted_at`. |
+| `snapshot_leaderboard` | Projects ranked by Cinder + Glance snapshot footprint; oldest-snapshot age flagged. |
+| `stale_snapshots` | Cinder snapshots older than N days, one row per snapshot, grouped by project. |
+| `fip_audit` | Unbound floating IPs per project, sorted oldest-first. |
+| `fip_pools` | Per-region external-network FIP pool utilization. |
+| `instance_history` | Full Nova action log for one instance UUID (drill-down). |
+| `volume_history` | Cinder metadata + attachment timeline for one volume UUID (drill-down). |
+| `volume_resizes` | Cinder extend events in the last N days (limited by `cinder.messages` retention). |
 
 ## Why query the DB instead of the API or virsh?
 
@@ -116,7 +128,7 @@ $EDITOR .env
 `.env` is gitignored. Overriding for a single run:
 
 ```
-OS_DB_PASSWORD__DFW1=oneoff python qemu_lifetime_report.py --list-domains
+OS_DB_PASSWORD__DFW1=oneoff opsbi list-domains
 ```
 
 ## CLI usage
