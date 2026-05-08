@@ -1,0 +1,27 @@
+{% extends "admin/_layout.html" %}
+{% block admin_body %}
+<h1 class="text-2xl font-semibold mb-2">Administration</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Manage regions, schema names, Keystone integration, and local
+  administrators. All changes are recorded in the audit log.
+</p>
+
+<dl class="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
+  <div class="card"><div class="card-body">
+    <dt class="text-xs uppercase text-gray-500">Setup status</dt>
+    <dd class="text-lg font-mono">{{ setup_status }}</dd>
+  </div></div>
+  <div class="card"><div class="card-body">
+    <dt class="text-xs uppercase text-gray-500">Config DB</dt>
+    <dd class="text-sm font-mono break-all">{{ config_db_path }}</dd>
+  </div></div>
+</dl>
+
+{% if setup_status != 'OK' %}
+  <p class="mt-4">
+    <a href="{{ url_for('admin_setup_resume') }}" class="btn btn-primary">
+      Resume setup
+    </a>
+  </p>
+{% endif %}
+{% endblock %}

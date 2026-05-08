@@ -1,0 +1,28 @@
+{% extends "setup/_layout.html" %}
+{% block setup_body %}
+<h2 class="text-lg font-semibold mb-2">Create the first administrator</h2>
+<p class="text-sm text-gray-600 mb-4">
+  Local administrators sign in with a username and password stored in the
+  configuration database. Their credentials never traverse Keystone.
+</p>
+<form method="post" class="space-y-4">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label class="block">
+    <span class="text-sm font-medium">Username</span>
+    <input type="text" name="username" required minlength="2"
+           class="form-input mt-1 w-full" autofocus>
+  </label>
+  <label class="block">
+    <span class="text-sm font-medium">Password</span>
+    <input type="password" name="password" required minlength="8"
+           class="form-input mt-1 w-full">
+    <span class="text-xs text-gray-500">At least 8 characters.</span>
+  </label>
+  <label class="block">
+    <span class="text-sm font-medium">Confirm password</span>
+    <input type="password" name="confirm" required minlength="8"
+           class="form-input mt-1 w-full">
+  </label>
+  <button type="submit" class="btn btn-primary">Create administrator</button>
+</form>
+{% endblock %}

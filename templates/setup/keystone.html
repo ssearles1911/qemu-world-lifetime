@@ -1,0 +1,27 @@
+{% extends "setup/_layout.html" %}
+{% block setup_body %}
+<h2 class="text-lg font-semibold mb-2">Keystone authentication</h2>
+<p class="text-sm text-gray-600 mb-4">
+  End users sign in with their Keystone credentials. Provide the v3 auth
+  URL — typically <code>http://&lt;controller&gt;:5000/v3</code> — and the
+  default user domain.
+</p>
+<form method="post" class="space-y-3">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label class="block">
+    <span class="text-sm font-medium">Keystone v3 auth URL</span>
+    <input type="url" name="keystone_auth_url" required
+           value="{{ keystone_auth_url }}"
+           placeholder="http://controller.example.com:5000/v3"
+           class="form-input mt-1 w-full">
+  </label>
+  <label class="block">
+    <span class="text-sm font-medium">Default user domain</span>
+    <input type="text" name="keystone_default_domain"
+           value="{{ keystone_default_domain }}"
+           class="form-input mt-1 w-full">
+    <span class="text-xs text-gray-500">Pre-filled on the login page; users can override.</span>
+  </label>
+  <button type="submit" class="btn btn-primary">Finish setup</button>
+</form>
+{% endblock %}

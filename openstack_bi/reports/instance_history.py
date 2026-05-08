@@ -27,13 +27,15 @@ class InstanceHistoryReport(Report):
         "request-id, message, event count, and the most recent event name."
     )
     category = "Lifecycle"
+    scope_to_projects = True
     params = [
         Param(name="instance_uuid", label="Instance UUID", kind="string",
               required=True, placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
               help="The Nova instance UUID to look up."),
     ]
 
-    def run(self, instance_uuid: str, **_: Any) -> ReportResult:
+    def run(self, instance_uuid: str, **kwargs: Any) -> ReportResult:
+        scope_project_ids = kwargs.get("_scope_project_ids")
         if not instance_uuid:
             return ReportResult(
                 columns=[], rows=[],
@@ -113,6 +115,19 @@ class InstanceHistoryReport(Report):
                 metadata={"error": err},
                 filename_stem=f"instance-history-{uuid}",
             )
+
+        # Project-scoped access check. None means unscoped (admin); a set
+        # restricts the caller to instances they have a role on. We return
+        # the same "not found" error rather than leaking the existence of
+        # an instance the user can't see.
+        if scope_project_ids is not None:
+            instance_project_id = instance_row.get("project_id")
+            if instance_project_id not in scope_project_ids:
+                return ReportResult(
+                    columns=[], rows=[],
+                    metadata={"error": f"Instance {uuid!r} not found in any region/cell."},
+                    filename_stem=f"instance-history-{uuid}",
+                )
 
         from openstack_bi.config import keystone_db, keystone_region
         proj_name = None

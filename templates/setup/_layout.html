@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Setup — OpenStack Ops BI{% endblock %}
+
+{% macro step_pill(name, label, current, completed_steps) -%}
+  {% set is_current = name == current %}
+  {% set is_done = completed_steps and (name in completed_steps) %}
+  <li class="flex-1 text-center text-xs uppercase tracking-wide
+             {% if is_current %}font-semibold text-primary
+             {% elif is_done %}text-gray-500
+             {% else %}text-gray-400{% endif %}">
+    {{ label }}
+  </li>
+{%- endmacro %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-semibold mb-1">First-run setup</h1>
+  <p class="text-sm text-gray-600 mb-6">
+    This wizard runs once. After it completes, you can revisit any of
+    these settings under <em>Admin</em>.
+  </p>
+
+  <ol class="flex items-center gap-2 mb-6 border-b pb-3">
+    {{ step_pill('admin',    '1. Admin',    step) }}
+    {{ step_pill('region',   '2. Regions',  step) }}
+    {{ step_pill('schema',   '3. Schemas',  step) }}
+    {{ step_pill('keystone', '4. Keystone', step) }}
+  </ol>
+
+  <div class="card">
+    <div class="card-body">
+      {% block setup_body %}{% endblock %}
+    </div>
+  </div>
+</div>
+{% endblock %}

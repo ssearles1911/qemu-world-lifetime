@@ -81,6 +81,11 @@ class Report(ABC):
     params: List[Param]
     # Used by the web catalog/navbar to group reports.
     category: str = "General"
+    # Whether the report honors per-user project scoping. When True,
+    # `run()` may receive `_scope_project_ids: Optional[Set[str]]` —
+    # None for unscoped/admin callers, a set for Keystone users.
+    # Reports that don't opt in are admin-only via the web catalog.
+    scope_to_projects: bool = False
 
     @abstractmethod
     def run(self, **kwargs: Any) -> ReportResult:

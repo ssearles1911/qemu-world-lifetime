@@ -4,21 +4,27 @@ Each report contributes its own argparse subparser. `opsbi <report> --help`
 shows the report's parameters; `opsbi <report> [args]` runs it and prints a
 grouped text table (or flat, if the report doesn't declare groupings).
 
-Also exposes a few top-level helpers that don't belong to any one report:
-    opsbi list-regions
-    opsbi list-domains
-    opsbi list-cells
+Top-level helpers:
+    opsbi init                    Apply config-DB migrations + seed defaults
+    opsbi list-regions            List configured regions
+    opsbi list-domains            List enabled Keystone domains
+    opsbi list-cells              List Nova cell DBs per region
+    opsbi admin {create,list,reset-password,delete}
+    opsbi config {show,set,import-env}
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 import pymysql
 
+from openstack_bi import _env_legacy, config_db
+from openstack_bi.auth import local as local_auth
 from openstack_bi.config import parse_regions
 from openstack_bi.reports import all_reports
 from openstack_bi.reports.base import Param, Report, ReportResult
@@ -119,6 +125,12 @@ def _print_flat(cols, rows, out, indent: str = "") -> None:
 def _handle_top_level(name: str) -> int:
     from openstack_bi import openstack
 
+    if name == "init":
+        config_db.init()
+        print(f"Initialized config DB at {config_db.db_path()}")
+        for warning in config_db.check_file_perms():
+            print(warning, file=sys.stderr)
+        return 0
     if name == "list-regions":
         for r in parse_regions():
             print(f"{r.name:<16}  {r.host}:{r.port}  user={r.user}")
@@ -133,6 +145,123 @@ def _handle_top_level(name: str) -> int:
                 print(f"{region.name}\t{cell}")
         return 0
     raise AssertionError(f"unknown top-level command: {name}")
+
+
+def _handle_admin(args: argparse.Namespace) -> int:
+    sub = args.admin_command
+    if sub == "create":
+        username = args.username or input("Username: ").strip()
+        password = args.password or getpass.getpass("Password: ")
+        confirm = password if args.password else getpass.getpass("Confirm: ")
+        if password != confirm:
+            print("Passwords did not match.", file=sys.stderr)
+            return 2
+        try:
+            local_auth.create_admin(username, password)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"Created administrator {username!r}.")
+        return 0
+    if sub == "list":
+        for u in local_auth.list_admins():
+            last = u.get("last_login_at") or "(never)"
+            print(f"{u['username']:<24}  created={u['created_at']}  last_login={last}")
+        return 0
+    if sub == "reset-password":
+        username = args.username
+        password = args.password or getpass.getpass("New password: ")
+        confirm = password if args.password else getpass.getpass("Confirm: ")
+        if password != confirm:
+            print("Passwords did not match.", file=sys.stderr)
+            return 2
+        try:
+            local_auth.reset_password(username, password)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"Reset password for {username!r}.")
+        return 0
+    if sub == "delete":
+        if config_db.count_local_admins() <= 1:
+            print("Refusing to remove the last administrator.", file=sys.stderr)
+            return 2
+        local_auth.delete_user(args.username)
+        print(f"Deleted administrator {args.username!r}.")
+        return 0
+    raise AssertionError(f"unknown admin command: {sub}")
+
+
+def _handle_config(args: argparse.Namespace) -> int:
+    sub = args.config_command
+    if sub == "show":
+        print(f"# config DB: {config_db.db_path()}")
+        print(f"# setup status: {config_db.setup_status()}")
+        print()
+        print("[regions]")
+        for r in config_db.list_all_regions():
+            ks = " keystone" if r["is_keystone_region"] else ""
+            en = "" if r["enabled"] else " disabled"
+            print(f"  {r['name']:<16} {r['host']}:{r['port']}  user={r['db_user']}{ks}{en}")
+        print()
+        print("[schema_names]")
+        for service, name in config_db.all_schema_names().items():
+            print(f"  {service:<12} {name}")
+        print()
+        print("[web_settings]")
+        for key, value in config_db.all_web_settings().items():
+            shown = value if key != "secret_key" else "(set; hidden)"
+            print(f"  {key:<24} {shown}")
+        print()
+        admins = local_auth.list_admins()
+        print(f"[local_admins]  ({len(admins)})")
+        for u in admins:
+            print(f"  {u['username']}")
+        return 0
+    if sub == "set":
+        config_db.set_web_setting(args.key, args.value)
+        print(f"Set web_setting {args.key} = {args.value!r}")
+        return 0
+    if sub == "import-env":
+        env_path = args.env_file
+        regions = _env_legacy.parse_legacy_regions(env_path)
+        if not regions:
+            print(
+                "No legacy region configuration found in environment.",
+                file=sys.stderr,
+            )
+            return 2
+        keystone_target = _env_legacy.parse_legacy_keystone_region()
+        for r in regions:
+            config_db.upsert_region(
+                name=r["name"],
+                host=str(r["host"]),
+                port=int(r["port"]),
+                db_user=str(r["db_user"]),
+                db_password=str(r["db_password"]),
+                is_keystone_region=(r["name"] == keystone_target) if keystone_target else False,
+                display_order=int(r["display_order"]),
+            )
+        if not keystone_target and regions:
+            # Legacy default: the first listed region.
+            config_db.upsert_region(
+                name=regions[0]["name"],
+                host=str(regions[0]["host"]),
+                port=int(regions[0]["port"]),
+                db_user=str(regions[0]["db_user"]),
+                db_password=str(regions[0]["db_password"]),
+                is_keystone_region=True,
+                display_order=int(regions[0]["display_order"]),
+            )
+        for service, name in _env_legacy.parse_legacy_schemas().items():
+            config_db.set_schema_name(service, name)
+        bind_host, bind_port = _env_legacy.parse_legacy_web()
+        config_db.set_web_setting("bind_host", bind_host)
+        config_db.set_web_setting("bind_port", bind_port)
+        config_db.record_audit("system", None, "import_env", env_path or "")
+        print(f"Imported {len(regions)} region(s) from environment.")
+        return 0
+    raise AssertionError(f"unknown config command: {sub}")
 
 
 def _dispatch_report(report: Report, ns: argparse.Namespace) -> int:
@@ -152,11 +281,44 @@ def build_parser() -> argparse.ArgumentParser:
     sub = root.add_subparsers(dest="command", required=True, metavar="<command>")
 
     for name, desc in [
+        ("init", "Initialize the configuration SQLite DB."),
         ("list-regions", "List configured regions."),
         ("list-domains", "List enabled Keystone domains."),
         ("list-cells", "List discovered Nova cell DBs per region."),
     ]:
         sub.add_parser(name, help=desc, description=desc)
+
+    admin = sub.add_parser("admin", help="Manage local administrators.")
+    admin_sub = admin.add_subparsers(dest="admin_command", required=True, metavar="<subcommand>")
+
+    sp_create = admin_sub.add_parser("create", help="Create a new local administrator.")
+    sp_create.add_argument("username", nargs="?")
+    sp_create.add_argument(
+        "--password", help="Password (omit for an interactive prompt — recommended).",
+    )
+
+    admin_sub.add_parser("list", help="List local administrators.")
+
+    sp_reset = admin_sub.add_parser("reset-password", help="Reset an administrator's password.")
+    sp_reset.add_argument("username")
+    sp_reset.add_argument("--password", help="New password (omit for prompt).")
+
+    sp_del = admin_sub.add_parser("delete", help="Remove a local administrator.")
+    sp_del.add_argument("username")
+
+    config_p = sub.add_parser("config", help="Inspect or update configuration entries.")
+    config_sub = config_p.add_subparsers(dest="config_command", required=True, metavar="<subcommand>")
+    config_sub.add_parser("show", help="Print the active configuration.")
+    sp_set = config_sub.add_parser("set", help="Set a web_settings key.")
+    sp_set.add_argument("key")
+    sp_set.add_argument("value")
+    sp_imp = config_sub.add_parser(
+        "import-env", help="Migrate a legacy .env into the SQLite store.",
+    )
+    sp_imp.add_argument(
+        "--env-file",
+        help="Path to a .env file (otherwise reads only the current environment).",
+    )
 
     for report in all_reports():
         sp = sub.add_parser(
@@ -174,8 +336,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.command in ("list-regions", "list-domains", "list-cells"):
+        if args.command in ("init", "list-regions", "list-domains", "list-cells"):
             return _handle_top_level(args.command)
+        if args.command == "admin":
+            return _handle_admin(args)
+        if args.command == "config":
+            return _handle_config(args)
         report: Report = args._report
         return _dispatch_report(report, args)
     except pymysql.MySQLError as exc:

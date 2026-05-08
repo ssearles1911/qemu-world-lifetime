@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Sign in — OpenStack Ops BI{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto card">
+  <div class="card-body">
+    <h1 class="text-2xl font-semibold mb-1">Sign in</h1>
+    <p class="text-sm text-gray-600 mb-6">
+      Use your Keystone credentials, or check
+      <em>Local administrator</em> for a host-local admin account.
+    </p>
+
+    <form method="post" action="{{ url_for('login') }}" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <input type="hidden" name="backend" id="backend-input" value="keystone">
+
+      <label class="block">
+        <span class="text-sm font-medium">Username</span>
+        <input type="text" name="username" autofocus required
+               class="form-input mt-1 w-full">
+      </label>
+
+      <label class="block">
+        <span class="text-sm font-medium">Password</span>
+        <input type="password" name="password" required
+               class="form-input mt-1 w-full">
+      </label>
+
+      <label class="block" id="domain-row">
+        <span class="text-sm font-medium">Keystone domain</span>
+        <input type="text" name="domain" value="{{ keystone_default_domain }}"
+               class="form-input mt-1 w-full">
+        <span class="text-xs text-gray-500 mt-1 block">
+          Domain id or name. Default: {{ keystone_default_domain }}.
+        </span>
+      </label>
+
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" id="local-toggle" class="form-checkbox">
+        Local administrator (bypass Keystone)
+      </label>
+
+      {% if not keystone_configured %}
+        <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+          Keystone is not yet configured. Use the local administrator option.
+        </p>
+      {% endif %}
+
+      <button type="submit" class="btn btn-primary w-full">Sign in</button>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var toggle = document.getElementById('local-toggle');
+  var backend = document.getElementById('backend-input');
+  var domainRow = document.getElementById('domain-row');
+  if (!toggle || !backend || !domainRow) return;
+  function apply() {
+    if (toggle.checked) {
+      backend.value = 'local';
+      domainRow.style.display = 'none';
+    } else {
+      backend.value = 'keystone';
+      domainRow.style.display = '';
+    }
+  }
+  toggle.addEventListener('change', apply);
+  apply();
+})();
+</script>
+{% endblock %}

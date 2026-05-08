@@ -1,0 +1,9 @@
+{% extends "setup/_layout.html" %}
+{% block setup_body %}
+<h2 class="text-lg font-semibold mb-2">Setup complete</h2>
+<p class="text-sm text-gray-600 mb-4">
+  All settings have been saved to the configuration database. You can
+  edit them at any time under <em>Admin</em>.
+</p>
+<a href="{{ url_for('catalog') }}" class="btn btn-primary">Open report catalog</a>
+{% endblock %}
