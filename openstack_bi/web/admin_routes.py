@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from flask import Flask, flash, redirect, render_template, request, url_for
 
 from .. import config_db
@@ -12,6 +14,10 @@ from ..auth.capabilities import (
     is_known_capability,
 )
 from ..auth.session import current_user, requires_capability
+
+# SQL identifier shape — schema names can't be parameterized in MariaDB,
+# so admin-supplied values that get spliced into a query must match this.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def register(app: Flask) -> None:
@@ -105,12 +111,28 @@ def schemas():
             value = (request.form.get(f"schema_{service}") or "").strip()
             if value:
                 config_db.set_schema_name(service, value)
-        config_db.record_audit("system", None, "schemas_updated", "")
-        flash("Schema names saved.", "success")
+        # Report-specific schemas live in web_settings (not schema_names)
+        # because they aren't OpenStack service schemas — they're optional
+        # auxiliary databases that some reports cross-join against.
+        spla_schema = (request.form.get("spla_managed_schema") or "").strip()
+        # Validate identifier shape — schema names can't be parameterized
+        # in MariaDB, so we splice the string. Admin-controlled, but still
+        # reject anything that wouldn't be a valid identifier.
+        if spla_schema and not _IDENTIFIER_RE.match(spla_schema):
+            flash(
+                f"Invalid schema name {spla_schema!r}: must match "
+                f"[A-Za-z_][A-Za-z0-9_]*",
+                "error",
+            )
+        else:
+            config_db.set_web_setting("spla_managed_schema", spla_schema)
+            config_db.record_audit("system", None, "schemas_updated", "")
+            flash("Schema names saved.", "success")
         return redirect(url_for("admin_schemas"))
     return render_template(
         "admin/schemas.html",
         schemas=config_db.all_schema_names(),
+        spla_managed_schema=config_db.web_setting("spla_managed_schema", "") or "",
     )
 
 

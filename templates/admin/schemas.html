@@ -5,16 +5,39 @@
   Defaults match a stock OpenStack deployment. Override only if your
   operator has renamed any service schemas.
 </p>
-<form method="post" class="space-y-3 max-w-md">
+<form method="post" class="space-y-6 max-w-md">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  {% for service in ['keystone', 'nova_api', 'cinder', 'glance', 'neutron'] %}
+
+  <div class="space-y-3">
+    <h2 class="text-sm uppercase tracking-wide text-gray-500">OpenStack services</h2>
+    {% for service in ['keystone', 'nova_api', 'cinder', 'glance', 'neutron'] %}
+      <label class="block">
+        <span class="text-sm font-medium font-mono">{{ service }}</span>
+        <input type="text" name="schema_{{ service }}"
+               value="{{ schemas.get(service, service) }}"
+               class="form-input mt-1 w-full">
+      </label>
+    {% endfor %}
+  </div>
+
+  <div class="space-y-3">
+    <h2 class="text-sm uppercase tracking-wide text-gray-500">Report-specific schemas</h2>
     <label class="block">
-      <span class="text-sm font-medium font-mono">{{ service }}</span>
-      <input type="text" name="schema_{{ service }}"
-             value="{{ schemas.get(service, service) }}"
+      <span class="text-sm font-medium font-mono">spla_managed_schema</span>
+      <input type="text" name="spla_managed_schema"
+             value="{{ spla_managed_schema }}"
+             placeholder="(empty = no managed-projects exclusion)"
              class="form-input mt-1 w-full">
+      <span class="text-xs text-gray-500 mt-1 block">
+        Optional auxiliary database used by the SPLA report to exclude
+        managed projects. The report assumes a table
+        <code>&lt;schema&gt;.project</code> with a
+        <code>project_id</code> column. Leave empty to skip the
+        exclusion entirely.
+      </span>
     </label>
-  {% endfor %}
+  </div>
+
   <button type="submit" class="btn btn-primary">Save schema names</button>
 </form>
 {% endblock %}

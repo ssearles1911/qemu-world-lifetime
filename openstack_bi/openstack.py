@@ -2,16 +2,17 @@
 
 Report-specific queries belong in the report module; only queries that
 more than one report consumes (Keystone domain/project lookups, Nova cell
-discovery) live here.
+discovery, host aggregate discovery) live here.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urlparse
 
-from .config import Region, keystone_db, keystone_region, nova_api_db
+from .config import Region, keystone_db, keystone_region, nova_api_db, parse_regions
 from .db import query
+from .util import safe_for_each_region
 
 
 def list_domains() -> List[Dict[str, Any]]:
@@ -67,6 +68,58 @@ def list_all_projects() -> List[Dict[str, Any]]:
         ORDER BY domain_id, name
     """
     return query(keystone_region(), keystone_db(), sql)
+
+
+def list_aggregates() -> List[Dict[str, Any]]:
+    """Names of every Nova host aggregate, across every configured region.
+
+    Returns one row per `(region, aggregate)` pair: `{"region", "name"}`.
+    Aggregate names can repeat across regions; the form's multiselect
+    deduplicates by name when rendering choices, but we surface the
+    region in the row so callers can correlate where each aggregate
+    lives if needed.
+
+    Per-region failures are silently dropped — a dead replica should not
+    prevent the SPLA form from rendering.
+    """
+    schema = nova_api_db()
+
+    def _collect(region: Region) -> List[Dict[str, Any]]:
+        rows = query(
+            region, schema,
+            "SELECT name FROM aggregates WHERE deleted = 0 ORDER BY name",
+        )
+        return [{"region": region.name, "name": r["name"]} for r in rows]
+
+    results, _errors = safe_for_each_region(parse_regions(), _collect)
+    out: List[Dict[str, Any]] = []
+    for _, region_rows in results:
+        out.extend(region_rows)
+    return out
+
+
+def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]:
+    """Compute hosts that belong to any of the named aggregates in `region`.
+
+    Returns a flat list of hostnames. Empty `aggregate_names` short-circuits
+    to an empty list to avoid the awkward `WHERE name IN ()` SQL.
+    """
+    if not aggregate_names:
+        return []
+    placeholders = ",".join(["%s"] * len(aggregate_names))
+    rows = query(
+        region, nova_api_db(),
+        f"""
+        SELECT DISTINCT ah.host
+        FROM aggregate_hosts ah
+        JOIN aggregates a ON a.id = ah.aggregate_id
+        WHERE a.name IN ({placeholders})
+          AND ah.deleted = 0
+          AND a.deleted = 0
+        """,
+        list(aggregate_names),
+    )
+    return [r["host"] for r in rows if r.get("host")]
 
 
 def list_cells(region: Region) -> List[str]:
