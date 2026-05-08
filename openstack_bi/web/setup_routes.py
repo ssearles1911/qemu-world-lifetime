@@ -18,7 +18,8 @@ from flask import Flask, abort, flash, redirect, render_template, request, url_f
 
 from .. import config_db
 from ..auth import local as local_auth
-from ..auth.session import admin_required, login_local
+from ..auth.capabilities import Capability
+from ..auth.session import login_local, requires_capability
 
 
 _STEP_ORDER = ["admin", "region", "schema", "keystone"]
@@ -76,7 +77,7 @@ def setup_step(step: str):
     return handler()
 
 
-@admin_required
+@requires_capability(Capability.MANAGE_CONFIG.value)
 def admin_resume():
     status = config_db.setup_status()
     return redirect(url_for("setup_step", step=_next_step_for_status(status)))

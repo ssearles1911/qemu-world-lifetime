@@ -17,11 +17,29 @@
   </div></div>
 </dl>
 
-{% if setup_status != 'OK' %}
+{% if setup_status != 'OK' and 'manage_config' in current_caps %}
   <p class="mt-4">
     <a href="{{ url_for('admin_setup_resume') }}" class="btn btn-primary">
       Resume setup
     </a>
   </p>
 {% endif %}
+
+<h2 class="text-sm uppercase tracking-wide text-gray-500 mt-6 mb-2">Your access</h2>
+<ul class="text-sm space-y-1">
+  {% if is_admin %}
+    <li class="text-gray-700">
+      <span class="font-mono bg-gray-100 px-1 rounded">local administrator</span>
+      — implicitly holds every capability.
+    </li>
+  {% else %}
+    {% if current_caps %}
+      {% for cap in current_caps|sort %}
+        <li><span class="font-mono bg-gray-100 px-1 rounded">{{ cap }}</span></li>
+      {% endfor %}
+    {% else %}
+      <li class="text-gray-500">No capabilities assigned.</li>
+    {% endif %}
+  {% endif %}
+</ul>
 {% endblock %}

@@ -19,7 +19,13 @@ from flask import Flask, redirect, request, url_for
 from flask_wtf.csrf import CSRFProtect
 
 from .. import config_db
-from ..auth.session import current_user, filter_visible_reports, is_admin
+from ..auth.capabilities import Capability
+from ..auth.session import (
+    current_capabilities,
+    current_user,
+    filter_visible_reports,
+    is_admin,
+)
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +91,7 @@ def create_app() -> Flask:
             for cat, items in groupby(visible, key=lambda r: r.category)
         ]
         info = current_user()
+        caps = current_capabilities()
         return {
             "all_reports_list": visible,
             "all_reports_by_category": categorized,
@@ -92,6 +99,14 @@ def create_app() -> Flask:
             "is_admin": is_admin(),
             "setup_status": config_db.setup_status(),
             "config_db_path": str(config_db.db_path()),
+            "current_caps": caps,
+            "has_admin_access": any(
+                c in caps for c in (
+                    Capability.MANAGE_CONFIG.value,
+                    Capability.MANAGE_USERS.value,
+                    Capability.VIEW_AUDIT_LOG.value,
+                )
+            ),
         }
 
     @app.before_request
