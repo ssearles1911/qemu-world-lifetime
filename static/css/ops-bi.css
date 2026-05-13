@@ -3,6 +3,18 @@
    Kept separate so the upstream files can be re-synced verbatim.
    ============================================================================ */
 
+/* Full-bleed report results section.
+   Top metadata cards and forms stay clamped to the surrounding `max-w-7xl`
+   container (where they look correct alongside text and inputs), but report
+   data tables can be very wide. The breakout pattern below pulls the wrapper
+   element out to the viewport edges regardless of how the parent is centered
+   or padded — `50% - 50vw` resolves to the negative half of the gap between
+   the parent's content box and the viewport. */
+.results-fullbleed {
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+}
+
 /* Severity / status badges. Values come from the report code; class names
    are derived in report.html via lower() + replace(' '|'_' -> '-'). */
 

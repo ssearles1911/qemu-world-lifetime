@@ -35,6 +35,12 @@ class Param:
     # behind a collapsible "Advanced options" panel so the run button stays
     # in view on reports with many params.
     advanced: bool = False
+    # Render-only hint — does not change how the param's data is collected
+    # or stored, only how the form input is drawn. Recognized values today:
+    #   "dropdown" on a `multiselect` → renders as <select multiple> instead
+    #     of the default inline checkbox row. Useful when the choice list is
+    #     long enough that the checkbox grid becomes unscannable.
+    widget: Optional[str] = None
 
     def resolve_choices(self) -> List[Tuple[str, str]]:
         if self.choices is None:
