@@ -5,19 +5,25 @@
   <aside class="md:border-r md:pr-4">
     <h2 class="text-xs uppercase tracking-wide text-gray-500 mb-2">Admin</h2>
     <nav class="flex flex-col gap-1 text-sm">
+      {% set manage_config = 'manage_config' in current_caps %}
+      {% set manage_users  = 'manage_users'  in current_caps %}
+      {% set view_audit    = 'view_audit_log' in current_caps %}
       {% set links = [
-        ('admin_index',    'Overview'),
-        ('admin_regions',  'Regions'),
-        ('admin_schemas',  'Schema names'),
-        ('admin_keystone', 'Keystone'),
-        ('admin_admins',   'Administrators'),
-        ('admin_audit',    'Audit log'),
+        ('admin_index',    'Overview',      true),
+        ('admin_regions',  'Regions',       manage_config),
+        ('admin_schemas',  'Schema names',  manage_config),
+        ('admin_keystone', 'Keystone',      manage_config),
+        ('admin_roles',    'Role mapping',  manage_config),
+        ('admin_admins',   'Administrators', manage_users),
+        ('admin_audit',    'Audit log',     view_audit),
       ] %}
-      {% for endpoint, label in links %}
-        <a href="{{ url_for(endpoint) }}"
-           class="px-2 py-1 rounded {% if request.endpoint == endpoint %}bg-primary text-white{% else %}hover:bg-gray-100 text-gray-700{% endif %}">
-          {{ label }}
-        </a>
+      {% for endpoint, label, allowed in links %}
+        {% if allowed %}
+          <a href="{{ url_for(endpoint) }}"
+             class="px-2 py-1 rounded {% if request.endpoint == endpoint %}bg-primary text-white{% else %}hover:bg-gray-100 text-gray-700{% endif %}">
+            {{ label }}
+          </a>
+        {% endif %}
       {% endfor %}
     </nav>
   </aside>

@@ -1,0 +1,62 @@
+{% extends "admin/_layout.html" %}
+{% block admin_body %}
+<h1 class="text-2xl font-semibold mb-2">Role mapping</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Map Keystone role names to application capabilities. A user who has any
+  of the listed roles (in any project, via any group, or via domain
+  inheritance) is granted the capability cluster-wide. Local
+  administrators always hold every capability and bypass this mapping.
+</p>
+<p class="text-xs text-gray-500 mb-6">
+  Role names are stored lowercased. Removing the last role mapped to
+  <span class="font-mono">manage_config</span> is refused for non-local-admin
+  callers — only a local administrator can perform that revocation.
+</p>
+
+<div class="space-y-6">
+  {% for cap in registry %}
+    <div class="card">
+      <div class="card-body">
+        <div class="flex items-baseline justify-between gap-3">
+          <div>
+            <h2 class="font-semibold text-lg">{{ cap.label }}</h2>
+            <code class="text-xs text-gray-500">{{ cap.name }}</code>
+          </div>
+        </div>
+        <p class="text-sm text-gray-600 mt-1 mb-3">{{ cap.description }}</p>
+
+        <div class="flex flex-wrap gap-2 items-center mb-3">
+          {% for role in mapping[cap.name] %}
+            <form method="post" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="revoke">
+              <input type="hidden" name="capability" value="{{ cap.name }}">
+              <input type="hidden" name="role_name" value="{{ role }}">
+              <button type="submit"
+                      class="text-sm font-mono bg-blue-50 text-blue-800 border border-blue-200 rounded px-2 py-0.5 hover:bg-red-50 hover:border-red-200 hover:text-red-700"
+                      title="Click to remove">
+                {{ role }} <span class="opacity-60">×</span>
+              </button>
+            </form>
+          {% else %}
+            <span class="text-xs text-gray-500">No role names mapped.</span>
+          {% endfor %}
+        </div>
+
+        <form method="post" class="flex gap-2 items-end">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="grant">
+          <input type="hidden" name="capability" value="{{ cap.name }}">
+          <label class="block flex-1">
+            <span class="text-xs uppercase text-gray-500">Add role</span>
+            <input type="text" name="role_name" required
+                   placeholder="e.g. admin or member"
+                   class="form-input mt-1 w-full">
+          </label>
+          <button type="submit" class="btn btn-secondary">Grant</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

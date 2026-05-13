@@ -36,12 +36,22 @@
   </th>
 {%- endmacro %}
 
-{% macro td_cell(col_key, value, numeric_cols) -%}
+{% macro td_cell(col_key, value, numeric_cols, row=None) -%}
   {%- set classes = [] -%}
   {%- if col_key == 'uuid' %}{% set _ = classes.append('font-mono') %}{% set _ = classes.append('text-xs') %}{% set _ = classes.append('text-gray-500') %}{% endif -%}
   {%- if col_key in ('last_action_time', 'age', 'created_at') %}{% set _ = classes.append('whitespace-nowrap') %}{% endif -%}
   {%- if col_key in numeric_cols %}{% set _ = classes.append('text-right') %}{% set _ = classes.append('tabular-nums') %}{% set _ = classes.append('whitespace-nowrap') %}{% endif -%}
-  <td{% if classes %} class="{{ classes|join(' ') }}"{% endif %}>{{ cell(col_key, value) }}</td>
+  {#- Drill-down: a row may carry a `<col>_link` companion field. When
+      present and non-empty, render the cell value wrapped in an anchor
+      so the user can navigate into a related report. -#}
+  {%- set link = row.get(col_key + '_link') if row else None -%}
+  <td{% if classes %} class="{{ classes|join(' ') }}"{% endif %}>
+    {%- if link and value is not none -%}
+      <a href="{{ link }}" class="text-blue-700 hover:underline">{{ cell(col_key, value) }}</a>
+    {%- else -%}
+      {{ cell(col_key, value) }}
+    {%- endif -%}
+  </td>
 {%- endmacro %}
 
 {% macro field(p, values, choices) -%}
@@ -206,7 +216,7 @@
                   <tr>
                     {% for col_key, _ in visible_columns %}
                       {% if col_key not in result.groupings %}
-                        {{ td_cell(col_key, r[col_key], numeric_cols) }}
+                        {{ td_cell(col_key, r[col_key], numeric_cols, r) }}
                       {% endif %}
                     {% endfor %}
                   </tr>
@@ -233,7 +243,7 @@
               {% set sev = row_severity(r) %}
               <tr{% if sev %} data-severity="{{ sev }}"{% endif %}>
                 {% for col_key, _ in visible_columns %}
-                  {{ td_cell(col_key, r[col_key], numeric_cols) }}
+                  {{ td_cell(col_key, r[col_key], numeric_cols, r) }}
                 {% endfor %}
               </tr>
             {% endfor %}

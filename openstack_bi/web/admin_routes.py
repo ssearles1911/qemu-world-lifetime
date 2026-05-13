@@ -1,4 +1,4 @@
-"""Administrator pages: regions, schemas, Keystone settings, admins, audit log."""
+"""Administrator pages: regions, schemas, Keystone settings, admins, audit log, role mapping."""
 
 from __future__ import annotations
 
@@ -6,7 +6,12 @@ from flask import Flask, flash, redirect, render_template, request, url_for
 
 from .. import config_db
 from ..auth import local as local_auth
-from ..auth.session import admin_required
+from ..auth.capabilities import (
+    CAPABILITY_REGISTRY,
+    Capability,
+    is_known_capability,
+)
+from ..auth.session import current_user, requires_capability
 
 
 def register(app: Flask) -> None:
@@ -24,13 +29,25 @@ def register(app: Flask) -> None:
         methods=("GET", "POST"),
     )
     app.add_url_rule(
+        "/admin/roles", view_func=roles, endpoint="admin_roles",
+        methods=("GET", "POST"),
+    )
+    app.add_url_rule(
         "/admin/admins", view_func=admins, endpoint="admin_admins",
         methods=("GET", "POST"),
     )
     app.add_url_rule("/admin/audit", view_func=audit, endpoint="admin_audit")
 
 
-@admin_required
+def _admin_index_caps_required():
+    return (
+        Capability.MANAGE_CONFIG.value,
+        Capability.MANAGE_USERS.value,
+        Capability.VIEW_AUDIT_LOG.value,
+    )
+
+
+@requires_capability(*_admin_index_caps_required())
 def index():
     return render_template(
         "admin/index.html",
@@ -38,7 +55,7 @@ def index():
     )
 
 
-@admin_required
+@requires_capability(Capability.MANAGE_CONFIG.value)
 def regions():
     if request.method == "POST":
         action = request.form.get("action") or "save"
@@ -81,7 +98,7 @@ def regions():
     )
 
 
-@admin_required
+@requires_capability(Capability.MANAGE_CONFIG.value)
 def schemas():
     if request.method == "POST":
         for service in ("keystone", "nova_api", "cinder", "glance", "neutron"):
@@ -97,7 +114,7 @@ def schemas():
     )
 
 
-@admin_required
+@requires_capability(Capability.MANAGE_CONFIG.value)
 def keystone():
     if request.method == "POST":
         url = (request.form.get("keystone_auth_url") or "").strip()
@@ -119,7 +136,7 @@ def keystone():
     )
 
 
-@admin_required
+@requires_capability(Capability.MANAGE_USERS.value)
 def admins():
     if request.method == "POST":
         action = request.form.get("action") or "create"
@@ -165,9 +182,89 @@ def admins():
     )
 
 
-@admin_required
+@requires_capability(Capability.VIEW_AUDIT_LOG.value)
 def audit():
     return render_template(
         "admin/audit.html",
         rows=config_db.recent_audit(500),
+    )
+
+
+@requires_capability(Capability.MANAGE_CONFIG.value)
+def roles():
+    """Edit which Keystone role names grant which capabilities.
+
+    Bootstrap-deadlock guard: a non-local-admin actor cannot revoke the
+    last role mapped to `manage_config` — doing so would leave nobody
+    able to edit this very page. Local admins are exempt because their
+    `is_admin` flag bypasses capability checks regardless.
+    """
+    info = current_user() or {}
+    actor_kind = info.get("kind") or "?"
+    actor_id = str(info.get("user_id") or info.get("username") or "")
+    is_local_admin = bool(info.get("is_admin"))
+
+    if request.method == "POST":
+        action = request.form.get("action") or ""
+        capability = (request.form.get("capability") or "").strip()
+        role_name = (request.form.get("role_name") or "").strip().lower()
+
+        if not is_known_capability(capability):
+            flash(f"Unknown capability: {capability!r}.", "error")
+        elif not role_name:
+            flash("Role name is required.", "error")
+        elif action == "grant":
+            inserted = config_db.grant_role_capability(role_name, capability)
+            if inserted:
+                config_db.record_audit(
+                    actor_kind, actor_id, "capability_grant",
+                    f"{role_name}:{capability}",
+                )
+                flash(
+                    f"Role {role_name!r} now grants {capability}.", "success",
+                )
+            else:
+                flash(
+                    f"Role {role_name!r} already grants {capability}.", "info",
+                )
+        elif action == "revoke":
+            if (
+                capability == Capability.MANAGE_CONFIG.value
+                and not is_local_admin
+                and config_db.count_roles_for_capability(capability) <= 1
+            ):
+                flash(
+                    "Refusing to remove the last role mapped to "
+                    "`manage_config` — only a local administrator can do "
+                    "that, to avoid locking everyone out.",
+                    "error",
+                )
+            else:
+                removed = config_db.revoke_role_capability(role_name, capability)
+                if removed:
+                    config_db.record_audit(
+                        actor_kind, actor_id, "capability_revoke",
+                        f"{role_name}:{capability}",
+                    )
+                    flash(
+                        f"Role {role_name!r} no longer grants {capability}.",
+                        "success",
+                    )
+                else:
+                    flash(
+                        f"Role {role_name!r} was not mapped to {capability}.",
+                        "info",
+                    )
+        else:
+            flash("Unknown action.", "error")
+        return redirect(url_for("admin_roles"))
+
+    mapping = {
+        cap.name: config_db.roles_for_capability(cap.name)
+        for cap in CAPABILITY_REGISTRY
+    }
+    return render_template(
+        "admin/roles.html",
+        registry=CAPABILITY_REGISTRY,
+        mapping=mapping,
     )

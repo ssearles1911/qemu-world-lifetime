@@ -11,6 +11,7 @@ Top-level helpers:
     opsbi list-cells              List Nova cell DBs per region
     opsbi admin {create,list,reset-password,delete}
     opsbi config {show,set,import-env}
+    opsbi roles {list,grant,revoke,capabilities}
 """
 
 from __future__ import annotations
@@ -25,9 +26,22 @@ import pymysql
 
 from openstack_bi import _env_legacy, config_db
 from openstack_bi.auth import local as local_auth
+from openstack_bi.auth.capabilities import (
+    CAPABILITY_REGISTRY,
+    Capability,
+    is_known_capability,
+)
 from openstack_bi.config import parse_regions
 from openstack_bi.reports import all_reports
 from openstack_bi.reports.base import Param, Report, ReportResult
+
+
+def _cli_actor() -> str:
+    """Identifier recorded in the audit log for CLI invocations."""
+    try:
+        return f"cli:{getpass.getuser()}"
+    except Exception:  # noqa: BLE001
+        return "cli:?"
 
 
 def _add_param(sp: argparse.ArgumentParser, param: Param) -> None:
@@ -264,6 +278,77 @@ def _handle_config(args: argparse.Namespace) -> int:
     raise AssertionError(f"unknown config command: {sub}")
 
 
+def _handle_roles(args: argparse.Namespace) -> int:
+    sub = args.roles_command
+    actor = _cli_actor()
+    if sub == "capabilities":
+        for cap in CAPABILITY_REGISTRY:
+            print(f"{cap.name:<24}  {cap.label}")
+            print(f"{'':<24}  {cap.description}")
+        return 0
+    if sub == "list":
+        rows = config_db.list_role_caps()
+        if not rows:
+            print("(no role mappings)")
+            return 0
+        per_cap: Dict[str, List[str]] = defaultdict(list)
+        for row in rows:
+            per_cap[row["capability"]].append(row["role_name"])
+        for cap in sorted(per_cap):
+            print(f"{cap}")
+            for role in sorted(per_cap[cap]):
+                print(f"  {role}")
+        return 0
+    if sub == "grant":
+        capability = args.capability
+        role_name = (args.role or "").strip().lower()
+        if not is_known_capability(capability):
+            print(f"error: unknown capability {capability!r}", file=sys.stderr)
+            return 2
+        if not role_name:
+            print("error: role name is required", file=sys.stderr)
+            return 2
+        if config_db.grant_role_capability(role_name, capability):
+            config_db.record_audit(
+                "cli", actor, "capability_grant",
+                f"{role_name}:{capability}",
+            )
+            print(f"Granted {role_name!r} -> {capability}")
+        else:
+            print(f"Already granted: {role_name!r} -> {capability}")
+        return 0
+    if sub == "revoke":
+        capability = args.capability
+        role_name = (args.role or "").strip().lower()
+        if not is_known_capability(capability):
+            print(f"error: unknown capability {capability!r}", file=sys.stderr)
+            return 2
+        # CLI shares the bootstrap-deadlock guard the web UI enforces, but
+        # the CLI runs as whoever has shell access — which we already
+        # treat as root-equivalent — so the guard is informational here.
+        if (
+            capability == Capability.MANAGE_CONFIG.value
+            and config_db.count_roles_for_capability(capability) <= 1
+            and not args.force
+        ):
+            print(
+                "Refusing to remove the last role mapped to "
+                "`manage_config` without --force.",
+                file=sys.stderr,
+            )
+            return 2
+        if config_db.revoke_role_capability(role_name, capability):
+            config_db.record_audit(
+                "cli", actor, "capability_revoke",
+                f"{role_name}:{capability}",
+            )
+            print(f"Revoked {role_name!r} -> {capability}")
+        else:
+            print(f"No mapping found for {role_name!r} -> {capability}")
+        return 0
+    raise AssertionError(f"unknown roles command: {sub}")
+
+
 def _dispatch_report(report: Report, ns: argparse.Namespace) -> int:
     kwargs: Dict[str, Any] = {}
     for param in report.params:
@@ -320,6 +405,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to a .env file (otherwise reads only the current environment).",
     )
 
+    roles_p = sub.add_parser(
+        "roles",
+        help="Manage the Keystone role -> application capability mapping.",
+    )
+    roles_sub = roles_p.add_subparsers(
+        dest="roles_command", required=True, metavar="<subcommand>",
+    )
+    roles_sub.add_parser(
+        "capabilities", help="List the application capability registry.",
+    )
+    roles_sub.add_parser("list", help="List existing role -> capability mappings.")
+    sp_grant = roles_sub.add_parser("grant", help="Grant a capability to a role.")
+    sp_grant.add_argument("role", help="Keystone role name.")
+    sp_grant.add_argument("capability", help="Capability identifier (see `roles capabilities`).")
+    sp_revoke = roles_sub.add_parser("revoke", help="Revoke a capability from a role.")
+    sp_revoke.add_argument("role")
+    sp_revoke.add_argument("capability")
+    sp_revoke.add_argument(
+        "--force", action="store_true",
+        help="Allow removing the last role mapped to `manage_config`.",
+    )
+
     for report in all_reports():
         sp = sub.add_parser(
             report.id.replace("_", "-"),
@@ -342,6 +449,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _handle_admin(args)
         if args.command == "config":
             return _handle_config(args)
+        if args.command == "roles":
+            return _handle_roles(args)
         report: Report = args._report
         return _dispatch_report(report, args)
     except pymysql.MySQLError as exc:

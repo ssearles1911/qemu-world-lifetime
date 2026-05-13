@@ -73,7 +73,7 @@
           </div>
         </div>
         <div class="flex items-center space-x-2 lg:space-x-4 flex-shrink-0">
-          {% if is_admin %}
+          {% if has_admin_access %}
             <a href="{{ url_for('admin_index') }}"
                class="nav-link px-3 py-2 rounded-md hover:bg-primary/80 text-sm{% if request.endpoint and request.endpoint.startswith('admin_') %} active{% endif %}">
               Admin

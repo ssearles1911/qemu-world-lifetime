@@ -53,6 +53,22 @@ def list_projects(domain_id: str) -> List[Dict[str, Any]]:
     return query(keystone_region(), keystone_db(), sql, (domain_id,))
 
 
+def list_all_projects() -> List[Dict[str, Any]]:
+    """Every enabled non-domain project across every Keystone domain.
+
+    Returns rows with `id`, `name`, and `domain_id`. Used for reports
+    that aggregate over the whole deployment (domain-level leaderboard,
+    cross-domain QEMU lifetime, etc).
+    """
+    sql = """
+        SELECT id, name, domain_id
+        FROM project
+        WHERE is_domain = 0 AND enabled = 1
+        ORDER BY domain_id, name
+    """
+    return query(keystone_region(), keystone_db(), sql)
+
+
 def list_cells(region: Region) -> List[str]:
     """Discover cell DB names for one region from its `nova_api.cell_mappings`."""
     rows = query(

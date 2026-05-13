@@ -346,6 +346,87 @@ def count_local_admins() -> int:
         return int(cur.fetchone()["n"])
 
 
+# --- Role-capability mapping accessors ---------------------------------------
+
+def _norm_role(name: str) -> str:
+    return (name or "").strip().lower()
+
+
+def list_role_caps() -> List[Dict[str, str]]:
+    """All (role_name, capability) rows. Ordered for stable rendering."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT role_name, capability FROM role_capabilities "
+            "ORDER BY capability, role_name"
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def roles_for_capability(capability: str) -> List[str]:
+    with cursor() as cur:
+        cur.execute(
+            "SELECT role_name FROM role_capabilities WHERE capability = ? "
+            "ORDER BY role_name",
+            (capability,),
+        )
+        return [row["role_name"] for row in cur.fetchall()]
+
+
+def caps_for_roles(role_names: List[str]) -> List[str]:
+    """Capabilities granted by the union of the supplied role names.
+
+    Empty `role_names` short-circuits to an empty list to avoid the
+    awkward `WHERE role_name IN ()` SQL.
+    """
+    normalized = [_norm_role(r) for r in role_names if _norm_role(r)]
+    if not normalized:
+        return []
+    placeholders = ",".join("?" for _ in normalized)
+    with cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT capability FROM role_capabilities "
+            f"WHERE role_name IN ({placeholders})",
+            normalized,
+        )
+        return [row["capability"] for row in cur.fetchall()]
+
+
+def grant_role_capability(role_name: str, capability: str) -> bool:
+    """Idempotent. Returns True when a row was inserted, False when it
+    already existed. Capability is **not** validated here — callers
+    that want to refuse unknown capabilities should check first.
+    """
+    role = _norm_role(role_name)
+    if not role:
+        raise ValueError("role_name is required")
+    with cursor() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO role_capabilities (role_name, capability) "
+            "VALUES (?, ?)",
+            (role, capability),
+        )
+        return cur.rowcount > 0
+
+
+def revoke_role_capability(role_name: str, capability: str) -> bool:
+    role = _norm_role(role_name)
+    with cursor() as cur:
+        cur.execute(
+            "DELETE FROM role_capabilities WHERE role_name = ? AND capability = ?",
+            (role, capability),
+        )
+        return cur.rowcount > 0
+
+
+def count_roles_for_capability(capability: str) -> int:
+    with cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM role_capabilities WHERE capability = ?",
+            (capability,),
+        )
+        return int(cur.fetchone()["n"])
+
+
 # --- Audit log ---------------------------------------------------------------
 
 def record_audit(actor_kind: str, actor_id: Optional[str], action: str, detail: str = "") -> None:
