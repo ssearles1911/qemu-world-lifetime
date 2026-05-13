@@ -48,6 +48,13 @@ from .base import Param, Report, ReportResult
 # defense in depth.
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# Aggregate metadata key/value that marks a host as MAAS-managed. By
+# convention, operators tag MAAS aggregates with `service_type=maas`;
+# we use that to identify hosts to exclude when MAAS-managed VMs
+# shouldn't appear in SPLA reporting.
+MAAS_METADATA_KEY = "service_type"
+MAAS_METADATA_VALUE = "maas"
+
 
 def _region_choices() -> List[Tuple[str, str]]:
     return [(r.name, r.name) for r in parse_regions()]
@@ -190,6 +197,15 @@ class SplaInstancesReport(Report):
                  "image_name in volume_glance_metadata. Required.",
         ),
         Param(
+            name="include_maas", label="Include MAAS-managed VMs", kind="bool",
+            default=False,
+            help=(
+                "Off by default: VMs running on hosts in any aggregate "
+                f"tagged with `{MAAS_METADATA_KEY}={MAAS_METADATA_VALUE}` "
+                "are excluded. Check to include them."
+            ),
+        ),
+        Param(
             name="regions", label="Regions", kind="multiselect",
             choices=_region_choices,
             help="Which regions to span. Empty = all configured regions.",
@@ -219,6 +235,7 @@ class SplaInstancesReport(Report):
     def run(
         self,
         image_pattern: Optional[str] = None,
+        include_maas: bool = False,
         regions: Optional[List[str]] = None,
         host_include_pattern: Optional[str] = None,
         host_exclude_pattern: Optional[str] = None,
@@ -229,6 +246,7 @@ class SplaInstancesReport(Report):
         host_include = (host_include_pattern or "").strip() or None
         host_exclude = (host_exclude_pattern or "").strip() or None
         excluded_aggregates = list(exclude_aggregates or [])
+        include_maas_managed = bool(include_maas)
 
         selected_region_names = regions or None
         if selected_region_names is None:
@@ -263,16 +281,28 @@ class SplaInstancesReport(Report):
                 filename_stem="spla-instances-bad-config",
             )
 
+        # Tracks how many MAAS-managed hosts we ended up excluding across
+        # all regions, so the operator can see the exclusion took effect.
+        maas_host_total = 0
+
         # Per region: resolve the union of hosts that should be excluded
-        # because they belong to any selected aggregate.
+        # because they belong to any selected aggregate OR (unless the
+        # operator opted in) any aggregate tagged with the MAAS metadata
+        # marker.
         def _collect(region: Region) -> List[Dict[str, Any]]:
-            try:
-                excluded_hosts = openstack.aggregate_hosts(region, excluded_aggregates)
-            except Exception:  # noqa: BLE001 — surfaced via region_errors
-                excluded_hosts = []
-                # Re-raise so safe_for_each_region records the error;
-                # otherwise we'd silently miss aggregate config issues.
-                raise
+            nonlocal maas_host_total
+            excluded_hosts: List[str] = list(
+                openstack.aggregate_hosts(region, excluded_aggregates)
+            )
+            if not include_maas_managed:
+                maas_hosts = openstack.aggregate_hosts_by_metadata(
+                    region, MAAS_METADATA_KEY, MAAS_METADATA_VALUE,
+                )
+                maas_host_total += len(maas_hosts)
+                # Union — operators may have a MAAS aggregate listed
+                # explicitly in `exclude_aggregates` too; dedup so we
+                # don't repeat the same host name in the NOT IN clause.
+                excluded_hosts = sorted(set(excluded_hosts) | set(maas_hosts))
             sql, args = _build_clauses(
                 cinder_schema=cinder_schema,
                 image_pattern=pattern,
@@ -336,8 +366,17 @@ class SplaInstancesReport(Report):
             t["vcpus"] += int(r.get("vcpus") or 0)
             t["memory_mb"] += int(r.get("memory_mb") or 0)
 
+        if include_maas_managed:
+            maas_status = "included"
+        else:
+            maas_status = (
+                f"excluded ({maas_host_total} host(s) tagged "
+                f"{MAAS_METADATA_KEY}={MAAS_METADATA_VALUE})"
+            )
+
         metadata: Dict[str, Any] = {
             "image_pattern": pattern,
+            "maas_managed": maas_status,
             "host_include": host_include or "(none)",
             "host_exclude": host_exclude or "(none)",
             "excluded_aggregates": ", ".join(excluded_aggregates) or "(none)",

@@ -119,6 +119,38 @@ def list_aggregates() -> List[Dict[str, Any]]:
     return rows
 
 
+def aggregate_hosts_by_metadata(
+    region: Region, key: str, value: str,
+) -> List[str]:
+    """Compute hosts in any aggregate that has the given metadata pair.
+
+    Aggregate metadata lives in `nova_api.aggregate_metadata` as
+    key/value rows tied to `aggregate_id`. We use this to identify
+    classes of hosts (e.g. `service_type=maas`) without depending on
+    aggregate naming conventions, which vary by operator.
+
+    Returns a flat list of host names. Empty `key` short-circuits.
+    """
+    if not key:
+        return []
+    rows = query(
+        region, nova_api_db(),
+        """
+        SELECT DISTINCT ah.host
+        FROM aggregate_hosts ah
+        JOIN aggregates a ON a.id = ah.aggregate_id
+        JOIN aggregate_metadata am ON am.aggregate_id = a.id
+        WHERE am.`key` = %s
+          AND am.value = %s
+          AND (ah.deleted = 0 OR ah.deleted IS NULL)
+          AND (a.deleted = 0 OR a.deleted IS NULL)
+          AND (am.deleted = 0 OR am.deleted IS NULL)
+        """,
+        (key, value),
+    )
+    return [r["host"] for r in rows if r.get("host")]
+
+
 def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]:
     """Compute hosts that belong to any of the named aggregates in `region`.
 
