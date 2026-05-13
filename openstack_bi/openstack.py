@@ -130,6 +130,12 @@ def aggregate_hosts_by_metadata(
     aggregate naming conventions, which vary by operator.
 
     Returns a flat list of host names. Empty `key` short-circuits.
+
+    Note: `aggregate_hosts` and `aggregate_metadata` are join/metadata
+    tables and don't carry a `deleted` column in every Nova release
+    (e.g. modern Train+ schemas dropped it). We only filter `deleted`
+    on the parent `aggregates` entity; membership rows are presence-
+    based, so any row in `aggregate_hosts` means "host is in aggregate".
     """
     if not key:
         return []
@@ -142,9 +148,7 @@ def aggregate_hosts_by_metadata(
         JOIN aggregate_metadata am ON am.aggregate_id = a.id
         WHERE am.`key` = %s
           AND am.value = %s
-          AND (ah.deleted = 0 OR ah.deleted IS NULL)
           AND (a.deleted = 0 OR a.deleted IS NULL)
-          AND (am.deleted = 0 OR am.deleted IS NULL)
         """,
         (key, value),
     )
@@ -156,6 +160,9 @@ def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]
 
     Returns a flat list of hostnames. Empty `aggregate_names` short-circuits
     to an empty list to avoid the awkward `WHERE name IN ()` SQL.
+
+    See `aggregate_hosts_by_metadata` for why `aggregate_hosts.deleted` is
+    intentionally not filtered.
     """
     if not aggregate_names:
         return []
@@ -167,7 +174,6 @@ def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]
         FROM aggregate_hosts ah
         JOIN aggregates a ON a.id = ah.aggregate_id
         WHERE a.name IN ({placeholders})
-          AND (ah.deleted = 0 OR ah.deleted IS NULL)
           AND (a.deleted = 0 OR a.deleted IS NULL)
         """,
         list(aggregate_names),
