@@ -208,18 +208,19 @@ class SplaInstancesReport(Report):
                  "image_name in volume_glance_metadata. Required.",
         ),
         Param(
+            name="regions", label="Regions", kind="multiselect",
+            choices=_region_choices,
+            help="Which regions to span. Empty = all configured regions.",
+        ),
+        Param(
             name="include_maas", label="Include MAAS-managed VMs", kind="bool",
             default=False,
+            advanced=True,
             help=(
                 "Off by default: VMs running on hosts in any aggregate "
                 f"tagged with `{MAAS_METADATA_KEY}={MAAS_METADATA_VALUE}` "
                 "are excluded. Check to include them."
             ),
-        ),
-        Param(
-            name="regions", label="Regions", kind="multiselect",
-            choices=_region_choices,
-            help="Which regions to span. Empty = all configured regions.",
         ),
         Param(
             name="host_include_pattern", label="Host name LIKE", kind="string",
