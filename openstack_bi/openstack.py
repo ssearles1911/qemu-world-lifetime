@@ -82,19 +82,17 @@ def list_aggregates_with_errors() -> Tuple[List[Dict[str, Any]], List[Dict[str, 
         couldn't be queried. The CLI's `list-aggregates` surfaces these
         directly; the SPLA form swallows them but logs them at WARNING.
 
-    The `deleted` predicate accepts both `= 0` and `IS NULL` because
-    different OpenStack releases default the column differently.
+    Note: aggregate-related tables (aggregates, aggregate_hosts,
+    aggregate_metadata) no longer carry a `deleted` column in modern
+    Nova releases (Train+ dropped it from these specifically). We don't
+    filter on it — any row present is a live row.
     """
     schema = nova_api_db()
 
     def _collect(region: Region) -> List[Dict[str, Any]]:
         rows = query(
             region, schema,
-            """
-            SELECT name FROM aggregates
-            WHERE (deleted = 0 OR deleted IS NULL)
-            ORDER BY name
-            """,
+            "SELECT name FROM aggregates ORDER BY name",
         )
         return [{"region": region.name, "name": r["name"]} for r in rows]
 
@@ -119,11 +117,49 @@ def list_aggregates() -> List[Dict[str, Any]]:
     return rows
 
 
+def aggregate_hosts_by_metadata(
+    region: Region, key: str, value: str,
+) -> List[str]:
+    """Compute hosts in any aggregate that has the given metadata pair.
+
+    Aggregate metadata lives in `nova_api.aggregate_metadata` as
+    key/value rows tied to `aggregate_id`. We use this to identify
+    classes of hosts (e.g. `service_type=maas`) without depending on
+    aggregate naming conventions, which vary by operator.
+
+    Returns a flat list of host names. Empty `key` short-circuits.
+
+    Note: `aggregate_hosts` and `aggregate_metadata` are join/metadata
+    tables and don't carry a `deleted` column in every Nova release
+    (e.g. modern Train+ schemas dropped it). We only filter `deleted`
+    on the parent `aggregates` entity; membership rows are presence-
+    based, so any row in `aggregate_hosts` means "host is in aggregate".
+    """
+    if not key:
+        return []
+    rows = query(
+        region, nova_api_db(),
+        """
+        SELECT DISTINCT ah.host
+        FROM aggregate_hosts ah
+        JOIN aggregates a ON a.id = ah.aggregate_id
+        JOIN aggregate_metadata am ON am.aggregate_id = a.id
+        WHERE am.`key` = %s
+          AND am.value = %s
+        """,
+        (key, value),
+    )
+    return [r["host"] for r in rows if r.get("host")]
+
+
 def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]:
     """Compute hosts that belong to any of the named aggregates in `region`.
 
     Returns a flat list of hostnames. Empty `aggregate_names` short-circuits
     to an empty list to avoid the awkward `WHERE name IN ()` SQL.
+
+    See `aggregate_hosts_by_metadata` for why `aggregate_hosts.deleted` is
+    intentionally not filtered.
     """
     if not aggregate_names:
         return []
@@ -135,8 +171,6 @@ def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]
         FROM aggregate_hosts ah
         JOIN aggregates a ON a.id = ah.aggregate_id
         WHERE a.name IN ({placeholders})
-          AND (ah.deleted = 0 OR ah.deleted IS NULL)
-          AND (a.deleted = 0 OR a.deleted IS NULL)
         """,
         list(aggregate_names),
     )

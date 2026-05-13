@@ -1,0 +1,36 @@
+# openstack-ops-bi — standalone Docker deployment.
+#
+# `docker compose up -d` builds the image and starts a single container
+# that serves the web UI on port 8000. The configuration database
+# (regions, schema names, Keystone URL, local administrators, role
+# mappings, audit log) lives in the `opsbi-config` named volume so it
+# survives container restarts and image rebuilds.
+#
+# After first start, browse to http://<host>:8000/ to walk through the
+# setup wizard.
+
+services:
+  opsbi:
+    build: .
+    image: openstack-ops-bi:latest
+    container_name: opsbi
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - opsbi-config:/var/lib/opsbi
+    # The container reaches MariaDB replicas + Keystone via the host
+    # network. If those services live on private networks unreachable
+    # from the default bridge, switch to host networking or an external
+    # docker network — see BOOTSTRAP.md.
+    healthcheck:
+      # Use the in-image Python rather than requiring curl/wget so the
+      # base image stays small.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  opsbi-config:
