@@ -82,19 +82,17 @@ def list_aggregates_with_errors() -> Tuple[List[Dict[str, Any]], List[Dict[str, 
         couldn't be queried. The CLI's `list-aggregates` surfaces these
         directly; the SPLA form swallows them but logs them at WARNING.
 
-    The `deleted` predicate accepts both `= 0` and `IS NULL` because
-    different OpenStack releases default the column differently.
+    Note: aggregate-related tables (aggregates, aggregate_hosts,
+    aggregate_metadata) no longer carry a `deleted` column in modern
+    Nova releases (Train+ dropped it from these specifically). We don't
+    filter on it — any row present is a live row.
     """
     schema = nova_api_db()
 
     def _collect(region: Region) -> List[Dict[str, Any]]:
         rows = query(
             region, schema,
-            """
-            SELECT name FROM aggregates
-            WHERE (deleted = 0 OR deleted IS NULL)
-            ORDER BY name
-            """,
+            "SELECT name FROM aggregates ORDER BY name",
         )
         return [{"region": region.name, "name": r["name"]} for r in rows]
 
@@ -148,7 +146,6 @@ def aggregate_hosts_by_metadata(
         JOIN aggregate_metadata am ON am.aggregate_id = a.id
         WHERE am.`key` = %s
           AND am.value = %s
-          AND (a.deleted = 0 OR a.deleted IS NULL)
         """,
         (key, value),
     )
@@ -174,7 +171,6 @@ def aggregate_hosts(region: Region, aggregate_names: Sequence[str]) -> List[str]
         FROM aggregate_hosts ah
         JOIN aggregates a ON a.id = ah.aggregate_id
         WHERE a.name IN ({placeholders})
-          AND (a.deleted = 0 OR a.deleted IS NULL)
         """,
         list(aggregate_names),
     )
