@@ -142,7 +142,7 @@ def _build_clauses(
             n.created_at, n.id, n.hostname, n.display_name,
             n.vcpus, n.memory_mb, n.uuid, n.project_id,
             n.vm_state, n.host,
-            sv.image_name
+            MIN(sv.image_name) AS image_name
         FROM instances n
         JOIN {cinder_schema}.volume_attachment va ON va.instance_uuid = n.uuid
         JOIN {cinder_schema}.volumes v
@@ -172,7 +172,18 @@ def _build_clauses(
             f"WHERE mp.project_id = n.project_id)"
         )
 
-    sql_parts.append("ORDER BY n.created_at DESC")
+    # Collapse per-instance duplicates that come from multiple
+    # volume_attachment rows (multi-attach or historical records) pointing
+    # at the same bootable volume. The CTE already deduped image_name per
+    # volume_id; the outer GROUP BY + MIN(image_name) handles the case
+    # where the same instance picks up >1 row via the attachment join.
+    sql_parts.append("""
+        GROUP BY
+            n.created_at, n.id, n.hostname, n.display_name,
+            n.vcpus, n.memory_mb, n.uuid, n.project_id,
+            n.vm_state, n.host
+        ORDER BY n.created_at DESC
+    """)
     return "\n".join(sql_parts), args
 
 
