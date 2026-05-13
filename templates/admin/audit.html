@@ -1,0 +1,28 @@
+{% extends "admin/_layout.html" %}
+{% block admin_body %}
+<h1 class="text-2xl font-semibold mb-2">Audit log</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Most recent {{ rows|length }} events. Logins, configuration changes,
+  and administrator actions are all recorded here.
+</p>
+<table class="min-w-full text-xs">
+  <thead>
+    <tr class="text-left text-gray-500 border-b">
+      <th class="py-1 pr-3">Timestamp (UTC)</th>
+      <th class="py-1 pr-3">Actor</th>
+      <th class="py-1 pr-3">Action</th>
+      <th class="py-1 pr-3">Detail</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+      <tr class="border-b last:border-0 align-top">
+        <td class="py-1 pr-3 font-mono whitespace-nowrap">{{ r.ts }}</td>
+        <td class="py-1 pr-3 font-mono">{{ r.actor_kind }}{% if r.actor_id %}:{{ r.actor_id }}{% endif %}</td>
+        <td class="py-1 pr-3">{{ r.action }}</td>
+        <td class="py-1 pr-3">{{ r.detail or '' }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

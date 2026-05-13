@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 venv/
 .env
+opsbi.sqlite
+opsbi.sqlite-journal
+opsbi.sqlite-wal
+opsbi.sqlite-shm
 *.xlsx
 .DS_Store
 *.egg-info/

@@ -11,20 +11,36 @@
          autocomplete="off">
 </div>
 
+{% set categories = report_entries|groupby('report.category') %}
+
 <div id="report-sections">
-  {% for category, items in all_reports_by_category %}
+  {% for category, items in categories %}
     <section class="report-section mb-8">
       <h2 class="text-lg font-semibold mb-3 text-gray-700">{{ category }}</h2>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 report-grid">
-        {% for r in items %}
-          <a href="{{ url_for('run_report', report_id=r.id) }}"
-             class="report-card card hover:shadow-md transition-shadow block"
-             data-search-text="{{ (r.name + ' ' + r.description + ' ' + category)|lower }}">
-            <div class="card-body">
-              <h3 class="font-semibold text-lg mb-1">{{ r.name }}</h3>
-              <p class="text-sm text-gray-600">{{ r.description }}</p>
+        {% for entry in items %}
+          {% set r = entry.report %}
+          {% if entry.enabled %}
+            <a href="{{ url_for('run_report', report_id=r.id) }}"
+               class="report-card card hover:shadow-md transition-shadow block"
+               data-search-text="{{ (r.name + ' ' + r.description + ' ' + category)|lower }}">
+              <div class="card-body">
+                <h3 class="font-semibold text-lg mb-1">{{ r.name }}</h3>
+                <p class="text-sm text-gray-600">{{ r.description }}</p>
+              </div>
+            </a>
+          {% else %}
+            <div class="report-card card block opacity-50 cursor-not-allowed"
+                 data-search-text="{{ (r.name + ' ' + r.description + ' ' + category)|lower }}"
+                 title="Project scoping not yet implemented for this report — administrator only.">
+              <div class="card-body">
+                <h3 class="font-semibold text-lg mb-1">{{ r.name }}
+                  <span class="text-xs font-normal text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 ml-1 align-middle">admin only</span>
+                </h3>
+                <p class="text-sm text-gray-600">{{ r.description }}</p>
+              </div>
             </div>
-          </a>
+          {% endif %}
         {% endfor %}
       </div>
     </section>

@@ -1,46 +1,22 @@
-"""Region + DB config parsed from environment variables.
+"""Region + DB config, backed by the SQLite configuration store.
 
-Config schema
--------------
+Configuration used to come from `.env`. It now lives in the SQLite file at
+`OPSBI_CONFIG_DB` (defaults to `./opsbi.sqlite`), edited via the admin UI,
+the `opsbi config ...` CLI, or the first-run setup wizard. The only env
+var still consulted by this module is the SQLite path itself, resolved
+inside `config_db`.
 
-Multi-region (preferred):
-
-    OS_DB_REGIONS=dfw1,ord1
-    OS_DB_HOST__DFW1=replica-dfw1.internal
-    OS_DB_PORT__DFW1=3306
-    OS_DB_USER__DFW1=reporting
-    OS_DB_PASSWORD__DFW1=...
-    OS_DB_HOST__ORD1=replica-ord1.internal
-    OS_DB_PASSWORD__ORD1=...
-    KEYSTONE_REGION=dfw1          # optional; defaults to the first region
-
-The per-region env-var suffix is the region name uppercased with any
-non-alphanumeric characters replaced by underscores, so `dfw1` → `DFW1`,
-`us-east-2` → `US_EAST_2`.
-
-Single-region fallback (for deployments that haven't migrated yet): if
-`OS_DB_REGIONS` is unset but legacy `OS_DB_HOST` / `OS_DB_USER` /
-`OS_DB_PASSWORD` are present, a single region named `default` is synthesized.
-
-Keystone is assumed to be **shared across regions** (one Keystone serves the
-whole deployment). `KEYSTONE_REGION` names the region whose DB connection can
-reach the `keystone` schema — typically the region that physically hosts it.
+Public API (`Region`, `parse_regions`, `resolve_regions`, `keystone_region`,
+`keystone_db`, `nova_api_db`, `cinder_db`, `glance_db`, `neutron_db`) is
+unchanged so reports and the CLI dispatcher don't have to.
 """
 
 from __future__ import annotations
 
-import os
-import re
 from dataclasses import dataclass
 from typing import List, Optional
 
-# Load .env once, as early as possible, so every os.environ.get() below sees it.
-# Real env vars still take precedence.
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+from . import config_db
 
 
 @dataclass(frozen=True)
@@ -51,83 +27,27 @@ class Region:
     user: str
     password: str
 
-    @property
-    def suffix(self) -> str:
-        """Env-var suffix form: uppercase, non-alphanumerics → underscore."""
-        return _suffix(self.name)
 
-
-def _suffix(name: str) -> str:
-    """Canonical env-var suffix: uppercase, non-alphanumerics → underscore.
-
-    This is the documented form (e.g. `us-east-2` → `US_EAST_2`). Callers
-    should use `_region_suffix_candidates()` when reading env vars — some
-    users write suffixes with the dashes preserved (`US-EAST-2`), and
-    `python-dotenv` happily loads those despite POSIX frowning on them.
-    """
-    return re.sub(r"[^A-Z0-9]", "_", name.upper())
-
-
-def _region_suffix_candidates(name: str) -> List[str]:
-    """All suffix spellings to try when looking up per-region env vars.
-
-    Order: documented underscore form first, then any raw-uppercase form
-    that differs (dashes preserved, etc.). Duplicates removed.
-    """
-    canonical = _suffix(name)
-    raw = name.upper()
-    return [canonical] if canonical == raw else [canonical, raw]
-
-
-def _env(var: str, default: Optional[str] = None) -> Optional[str]:
-    val = os.environ.get(var)
-    return val if val not in (None, "") else default
-
-
-def _region_var(region_name: str, base: str, default: Optional[str]) -> Optional[str]:
-    """Read OS_DB_<BASE>__<SUFFIX>, trying both the underscore-normalized
-    suffix and the raw uppercase form, then falling back to the bare
-    OS_DB_<BASE> (legacy single-region form).
-    """
-    for suf in _region_suffix_candidates(region_name):
-        v = _env(f"OS_DB_{base}__{suf}")
-        if v is not None:
-            return v
-    return _env(f"OS_DB_{base}", default)
+def _row_to_region(row: dict) -> Region:
+    return Region(
+        name=row["name"],
+        host=row["host"],
+        port=int(row["port"]),
+        user=row["db_user"],
+        password=row["db_password"] or "",
+    )
 
 
 def parse_regions() -> List[Region]:
-    """Parse configured regions from the environment.
-
-    Returns a list of `Region` in the order they appear in `OS_DB_REGIONS`.
-    Raises `RuntimeError` if no regions can be resolved at all.
-    """
-    raw = _env("OS_DB_REGIONS")
-    names: List[str]
-    if raw:
-        names = [n.strip() for n in raw.split(",") if n.strip()]
-    elif _env("OS_DB_HOST") is not None:
-        # Legacy single-region deployment — synthesize a "default" region from
-        # the bare OS_DB_* vars.
-        names = ["default"]
-    else:
+    """All enabled regions in display order. Raises if none are configured."""
+    rows = config_db.list_regions()
+    if not rows:
         raise RuntimeError(
-            "No regions configured. Set OS_DB_REGIONS (or legacy OS_DB_HOST) in "
-            "your environment / .env file."
+            "No regions configured. Run `opsbi init` and complete the setup "
+            "wizard at http://<host>:<port>/setup, or `opsbi config import-env` "
+            "to migrate an existing .env."
         )
-
-    regions: List[Region] = []
-    for name in names:
-        host = _region_var(name, "HOST", "127.0.0.1")
-        port_s = _region_var(name, "PORT", "3306")
-        user = _region_var(name, "USER", "nova")
-        password = _region_var(name, "PASSWORD", "") or ""
-        try:
-            port = int(port_s)
-        except ValueError:
-            raise RuntimeError(f"OS_DB_PORT__{_suffix(name)} is not an integer: {port_s!r}")
-        regions.append(Region(name=name, host=host, port=port, user=user, password=password))
-    return regions
+    return [_row_to_region(r) for r in rows]
 
 
 def resolve_regions(selected: Optional[List[str]] = None) -> List[Region]:
@@ -152,40 +72,40 @@ def resolve_regions(selected: Optional[List[str]] = None) -> List[Region]:
 def keystone_region(regions: Optional[List[Region]] = None) -> Region:
     """Which region's DB connection hosts the shared `keystone` schema.
 
-    Defaults to the region named by `KEYSTONE_REGION`, or the first configured
-    region when that's unset.
+    The region flagged `is_keystone_region` wins; otherwise we fall back to
+    the first configured region.
     """
     regions = regions if regions is not None else parse_regions()
     if not regions:
         raise RuntimeError("No regions configured; cannot resolve keystone region.")
-    target = _env("KEYSTONE_REGION")
-    if target:
+    flagged = config_db.get_keystone_region_name()
+    if flagged:
         for r in regions:
-            if r.name == target:
+            if r.name == flagged:
                 return r
         known = ", ".join(r.name for r in regions)
         raise RuntimeError(
-            f"KEYSTONE_REGION={target!r} does not match any configured region. "
+            f"Keystone region {flagged!r} is not in the active region set. "
             f"Configured regions: {known}"
         )
     return regions[0]
 
 
 def keystone_db() -> str:
-    return _env("KEYSTONE_DB", "keystone") or "keystone"
+    return config_db.get_schema_name("keystone")
 
 
 def nova_api_db() -> str:
-    return _env("NOVA_API_DB", "nova_api") or "nova_api"
+    return config_db.get_schema_name("nova_api")
 
 
 def cinder_db() -> str:
-    return _env("CINDER_DB", "cinder") or "cinder"
+    return config_db.get_schema_name("cinder")
 
 
 def glance_db() -> str:
-    return _env("GLANCE_DB", "glance") or "glance"
+    return config_db.get_schema_name("glance")
 
 
 def neutron_db() -> str:
-    return _env("NEUTRON_DB", "neutron") or "neutron"
+    return config_db.get_schema_name("neutron")

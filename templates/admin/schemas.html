@@ -1,0 +1,20 @@
+{% extends "admin/_layout.html" %}
+{% block admin_body %}
+<h1 class="text-2xl font-semibold mb-2">Schema names</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Defaults match a stock OpenStack deployment. Override only if your
+  operator has renamed any service schemas.
+</p>
+<form method="post" class="space-y-3 max-w-md">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% for service in ['keystone', 'nova_api', 'cinder', 'glance', 'neutron'] %}
+    <label class="block">
+      <span class="text-sm font-medium font-mono">{{ service }}</span>
+      <input type="text" name="schema_{{ service }}"
+             value="{{ schemas.get(service, service) }}"
+             class="form-input mt-1 w-full">
+    </label>
+  {% endfor %}
+  <button type="submit" class="btn btn-primary">Save schema names</button>
+</form>
+{% endblock %}

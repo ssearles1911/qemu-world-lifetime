@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 import traceback
-from collections import defaultdict
 from typing import Any, Dict, List
 
-from flask import Flask, abort, render_template, request, send_file
+from flask import Flask, abort, flash, redirect, render_template, request, send_file, url_for
 
 from openstack_bi.reports import all_reports, by_id
 from openstack_bi.reports.base import ReportResult
 
+from ..auth.session import (
+    current_user_project_ids,
+    login_required,
+    report_visible_to_current_user,
+)
 from . import excel, forms
 
 
@@ -47,8 +51,14 @@ def _render_error(exc):
     ), 500
 
 
+@login_required
 def catalog():
-    return render_template("catalog.html", reports=all_reports())
+    reports = sorted(all_reports(), key=lambda r: (r.category, r.name))
+    visible = [
+        {"report": r, "enabled": report_visible_to_current_user(r)}
+        for r in reports
+    ]
+    return render_template("catalog.html", report_entries=visible)
 
 
 def _resolve_report(report_id: str):
@@ -58,8 +68,26 @@ def _resolve_report(report_id: str):
         abort(404, f"Unknown report: {report_id}")
 
 
+def _block_if_invisible(report):
+    """Return a redirect response if the current user can't see this report,
+    else None. Keeps view code tidy without abusing `abort()`.
+    """
+    if not report_visible_to_current_user(report):
+        flash(
+            f"'{report.name}' doesn't yet support project-scoped access. "
+            "Ask an administrator to run it for you.",
+            "error",
+        )
+        return redirect(url_for("catalog"))
+    return None
+
+
+@login_required
 def run_report(report_id: str):
     report = _resolve_report(report_id)
+    blocked = _block_if_invisible(report)
+    if blocked is not None:
+        return blocked
 
     # Resolve dynamic choices once per request so multiselects can render
     # checkboxes for every available value.
@@ -75,7 +103,10 @@ def run_report(report_id: str):
     # Only run if every required param has a value.
     missing_required = [p for p in report.params if p.required and not collected.get(p.name)]
     if request.args and not missing_required:
-        result = report.run(**collected)
+        run_kwargs = dict(collected)
+        if getattr(report, "scope_to_projects", False):
+            run_kwargs["_scope_project_ids"] = current_user_project_ids()
+        result = report.run(**run_kwargs)
         if "error" in result.metadata:
             error = result.metadata["error"]
         elif result.groupings:
@@ -138,12 +169,18 @@ def _detect_numeric_cols(result: ReportResult, visible_columns) -> set:
     return numeric
 
 
+@login_required
 def export_report(report_id: str):
     report = _resolve_report(report_id)
+    blocked = _block_if_invisible(report)
+    if blocked is not None:
+        return blocked
     collected = forms.collect(report.params, request)
     missing_required = [p for p in report.params if p.required and not collected.get(p.name)]
     if missing_required:
         abort(400, f"Missing required parameter(s): {', '.join(p.name for p in missing_required)}")
+    if getattr(report, "scope_to_projects", False):
+        collected["_scope_project_ids"] = current_user_project_ids()
     result = report.run(**collected)
     if "error" in result.metadata:
         abort(404, result.metadata["error"])
