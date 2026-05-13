@@ -1,0 +1,30 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+build
+dist
+
+# Local-only state — never copy any developer's SQLite or .env into
+# the image.
+.env
+opsbi.sqlite
+opsbi.sqlite-*
+
+# Test + tooling caches.
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Output artifacts.
+*.xlsx
+.DS_Store
+
+# Editor noise.
+.idea
+.vscode
+*.swp

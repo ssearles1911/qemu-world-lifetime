@@ -1,10 +1,91 @@
 # Bootstrap
 
 Configuration lives in a local SQLite file (`opsbi.sqlite` by default).
-The only environment variable read at startup is `OPSBI_CONFIG_DB`,
-which overrides the path to that file.
+The only environment variables read at startup are `OPSBI_CONFIG_DB`
+(path to the SQLite file) and, in the Docker image, `OPSBI_BIND_ADDRESS`
+(`host:port` the WSGI server binds to).
 
-## First run
+## Choose a deployment path
+
+* [Docker (Compose)](#docker-compose) — recommended for production-style
+  deploys; everything is wrapped in a single container with a persistent
+  named volume.
+* [Manual install](#manual-install) — virtualenv on the host; useful for
+  development.
+
+After either path, complete the same web setup wizard described below.
+
+## Docker (Compose)
+
+```bash
+docker compose up -d
+```
+
+That builds the image from this repo, starts a single `opsbi` container,
+and serves the web UI on port 8000. The configuration database (regions,
+schema names, Keystone URL, local administrators, role mappings, audit
+log) lives in the `opsbi-config` named volume so it survives container
+restarts and image rebuilds.
+
+Browse to `http://<host>:8000/` to start the setup wizard.
+
+To follow the logs:
+
+```bash
+docker compose logs -f opsbi
+```
+
+To rebuild after pulling new code:
+
+```bash
+git pull
+docker compose build
+docker compose up -d
+```
+
+To wipe the configuration database and start over:
+
+```bash
+docker compose down
+docker volume rm openstack-ops-bi-suite_opsbi-config   # name may vary
+docker compose up -d
+```
+
+### Customizing the Docker deploy
+
+* **Port** — change the host side of the published port in
+  `docker-compose.yml` (e.g. `"9000:8000"` to expose on 9000).
+* **Bind address** — set `OPSBI_BIND_ADDRESS=0.0.0.0:8000` (default)
+  via the service `environment:` block. The `bind_host` / `bind_port`
+  values shown in the setup wizard are only consulted by `python
+  web.py` (the dev server); production uses waitress and the env var.
+* **Volume location** — replace the named volume with a host bind mount
+  if you want the SQLite file on disk:
+  ```yaml
+  volumes:
+    - ./opsbi-data:/var/lib/opsbi
+  ```
+  Make sure the host directory is owned by UID/GID 10001 (the container
+  user) or world-writable: `chown -R 10001:10001 ./opsbi-data`.
+* **Network reachability** — the container must reach the MariaDB
+  replicas and the Keystone endpoint. If those are on private networks
+  unreachable from the default Docker bridge, attach the container to
+  an external Docker network or switch to `network_mode: host`.
+* **TLS / reverse proxy** — terminate TLS in front (nginx, Caddy,
+  Traefik). The container speaks plain HTTP on its listen address.
+
+### CLI access inside the container
+
+```bash
+docker compose exec opsbi opsbi admin create alice
+docker compose exec opsbi opsbi config show
+docker compose exec opsbi opsbi list-aggregates
+docker compose exec opsbi opsbi roles list
+```
+
+Every `opsbi …` subcommand is available the same way.
+
+## Manual install
 
 ```bash
 pip install -e .
@@ -12,7 +93,16 @@ opsbi init                 # creates ./opsbi.sqlite, applies migrations
 python web.py              # serves on 127.0.0.1:8000 by default
 ```
 
-Browse to `http://127.0.0.1:8000/`. The first-run setup wizard will:
+For production behind a real WSGI server:
+
+```bash
+waitress-serve --listen=0.0.0.0:8000 web:app
+```
+
+## First-run setup wizard
+
+After either deploy path, browse to `http://<host>:8000/`. The first-run
+setup wizard will:
 
 1. Create a local administrator account.
 2. Add at least one region and mark which one hosts the shared Keystone schema.
@@ -51,3 +141,7 @@ refuses to start if it is group-writable on a multi-user host.
 ```bash
 chmod 600 opsbi.sqlite
 ```
+
+Inside the Docker image, the file is owned by UID/GID 10001 and lives
+on the `opsbi-config` volume — Docker handles the permissions for you
+unless you're using a host bind mount (see above).
