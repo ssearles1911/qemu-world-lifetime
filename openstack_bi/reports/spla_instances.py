@@ -223,6 +223,16 @@ class SplaInstancesReport(Report):
             ),
         ),
         Param(
+            name="verbose", label="Verbose metadata cards", kind="bool",
+            default=False,
+            advanced=True,
+            help=(
+                "Show extra metadata cards (MAAS managed, host include / "
+                "exclude patterns) at the top of the report. Off by default "
+                "to keep the summary area tidy."
+            ),
+        ),
+        Param(
             name="host_include_pattern", label="Host name LIKE", kind="string",
             placeholder="(empty = no host include filter)",
             advanced=True,
@@ -252,6 +262,7 @@ class SplaInstancesReport(Report):
         host_include_pattern: Optional[str] = None,
         host_exclude_pattern: Optional[str] = None,
         exclude_aggregates: Optional[List[str]] = None,
+        verbose: bool = False,
         **_: Any,
     ) -> ReportResult:
         pattern = (image_pattern or "").strip() or "%SPLA%"
@@ -388,9 +399,6 @@ class SplaInstancesReport(Report):
 
         metadata: Dict[str, Any] = {
             "image_pattern": pattern,
-            "maas_managed": maas_status,
-            "host_include": host_include or "(none)",
-            "host_exclude": host_exclude or "(none)",
             "excluded_aggregates": ", ".join(excluded_aggregates) or "(none)",
             "managed_projects_schema": maas_schema or "(unset; not excluded)",
             "regions": ", ".join(r.name for r in selected_regions) or "(none)",
@@ -399,6 +407,12 @@ class SplaInstancesReport(Report):
             "total_memory_gb": sum(r["memory_mb"] for r in rows_out) // 1024,
             "region_errors": format_region_errors(region_errors),
         }
+        # Verbose-only cards: relegated behind the advanced checkbox so
+        # the summary area stays compact for the common run.
+        if verbose:
+            metadata["maas_managed"] = maas_status
+            metadata["host_include"] = host_include or "(none)"
+            metadata["host_exclude"] = host_exclude or "(none)"
         # One card per region with its own roll-up.
         for region_name, totals in sorted(region_totals.items()):
             metadata[f"region_{region_name}"] = (
