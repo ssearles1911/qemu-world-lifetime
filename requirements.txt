@@ -1,5 +1,16 @@
+# Runtime dependencies. Mirrors [project.dependencies] in pyproject.toml.
+# `pip install .` is the canonical install; this file exists so
+# `pip install -r requirements.txt` (without installing the package)
+# pulls the same set.
 PyMySQL>=1.0,<2.0
 Flask>=2.3,<4.0
+Flask-WTF>=1.2,<2.0
 openpyxl>=3.1,<4.0
-python-dotenv>=1.0,<2.0
 matplotlib>=3.5,<4.0
+keystoneauth1>=5.0,<6.0
+requests>=2.28,<3.0
+waitress>=2.1,<4.0
+
+# Optional — only needed to read a .env file with
+# `opsbi config import-env --env-file ...`.
+python-dotenv>=1.0,<2.0
