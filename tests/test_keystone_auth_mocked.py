@@ -1,9 +1,12 @@
 """Keystone authentication path with mocked HTTP layer.
 
-We don't reach a real Keystone in CI — instead we monkey-patch the
-keystoneauth1 v3 Password identity plugin and the session used to fetch
-role assignments. Login is gated on the admin role; these tests cover
-that gate, project resolution, and the scoped-token / session wiring.
+We don't reach a real Keystone in CI. Role discovery now reads roles
+from project-scoped tokens (see openstack_bi.auth.keystone) rather than
+`/v3/role_assignments`, so these tests mock two seams: the unscoped
+auth, and the `_list_projects` / `_scope_to_project` helpers.
+
+`test_authenticate_succeeds_via_scoped_tokens` is the regression test
+for the `/v3/role_assignments` 403 — login no longer makes that call.
 """
 
 from __future__ import annotations
@@ -21,75 +24,62 @@ def configured_keystone(tmp_config_db):
     return config_db
 
 
-def _stub_password(monkeypatch, user_id="user-123", username="bob",
-                   domain_id="dom-1", domain_name="Default"):
+def _stub_unscoped(monkeypatch, user_id="u1", username="bob"):
+    """Mock the unscoped Keystone auth — the credential check + identity."""
     from openstack_bi.auth import keystone as ks_auth
 
     fake_access = MagicMock()
     fake_access.user = {
-        "id": user_id,
-        "name": username,
-        "domain": {"id": domain_id, "name": domain_name},
+        "id": user_id, "name": username,
+        "domain": {"id": "d1", "name": "Default"},
     }
     fake_access.user_id = user_id
 
     fake_password = MagicMock()
     fake_password.get_access.return_value = fake_access
-    monkeypatch.setattr(ks_auth.v3_identity, "Password", lambda **kw: fake_password)
-    return fake_password
-
-
-def _assignment(project_id, role_id):
-    return {"scope": {"project": {"id": project_id}}, "role": {"id": role_id}}
-
-
-def _stub_session(monkeypatch, assignments, roles_catalog):
-    """Patch keystoneauth1 Session so role_assignments / roles are mocked.
-
-    `roles_catalog` is a {role_id: role_name} mapping returned by /v3/roles.
-    """
-    from openstack_bi.auth import keystone as ks_auth
-
-    ra_resp = MagicMock()
-    ra_resp.status_code = 200
-    ra_resp.json.return_value = {"role_assignments": assignments}
-
-    roles_resp = MagicMock()
-    roles_resp.status_code = 200
-    roles_resp.json.return_value = {
-        "roles": [{"id": rid, "name": name} for rid, name in roles_catalog.items()]
-    }
-
-    def fake_get(url, *args, **kwargs):
-        return ra_resp if "role_assignments" in url else roles_resp
 
     fake_session = MagicMock()
     fake_session.get_token.return_value = "tk"
-    fake_session.get.side_effect = fake_get
+
+    monkeypatch.setattr(ks_auth.v3_identity, "Password", lambda **kw: fake_password)
     monkeypatch.setattr(ks_auth.ks_session, "Session", lambda **kw: fake_session)
-    return fake_session
 
 
-def test_authenticate_collects_project_ids(configured_keystone, monkeypatch):
+def _scoped_access(role_names):
+    acc = MagicMock()
+    acc.role_names = list(role_names)
+    return acc
+
+
+def _stub_scopes(monkeypatch, project_roles):
+    """Mock project enumeration + scoped tokens.
+
+    `project_roles` maps project id -> list of role names on that project.
+    """
     from openstack_bi.auth import keystone as ks_auth
 
-    _stub_password(monkeypatch, user_id="u1", username="bob")
-    _stub_session(
-        monkeypatch,
-        assignments=[
-            _assignment("p1", "r-admin"),
-            _assignment("p2", "r-admin"),
-            _assignment("p3", "r-member"),
-        ],
-        roles_catalog={"r-admin": "admin", "r-member": "member"},
-    )
+    projects = [{"id": pid, "name": pid} for pid in project_roles]
+    monkeypatch.setattr(ks_auth, "_list_projects", lambda sess: projects)
+
+    def fake_scope(auth_url, username, password, user_domain, project_id):
+        roles = project_roles.get(project_id)
+        return _scoped_access(roles) if roles is not None else None
+
+    monkeypatch.setattr(ks_auth, "_scope_to_project", fake_scope)
+
+
+def test_authenticate_succeeds_via_scoped_tokens(configured_keystone, monkeypatch):
+    from openstack_bi.auth import keystone as ks_auth
+
+    _stub_unscoped(monkeypatch, user_id="u1", username="bob")
+    _stub_scopes(monkeypatch, {"p1": ["admin"], "p2": ["member"]})
 
     identity = ks_auth.authenticate("bob", "pw", domain="Default")
     assert identity.user_id == "u1"
     assert identity.username == "bob"
-    assert identity.project_ids == {"p1", "p2", "p3"}
+    assert identity.project_ids == {"p1", "p2"}
     assert "admin" in identity.role_names
-    # A scoped token was obtained for later Nova calls.
+    # A scoped token was kept for later Nova calls.
     assert identity.scoped_access is not None
 
 
@@ -97,12 +87,8 @@ def test_authenticate_rejects_non_admin(configured_keystone, monkeypatch):
     from openstack_bi import config_db
     from openstack_bi.auth import keystone as ks_auth
 
-    _stub_password(monkeypatch, user_id="u2", username="carol")
-    _stub_session(
-        monkeypatch,
-        assignments=[_assignment("p1", "r-member")],
-        roles_catalog={"r-member": "member"},
-    )
+    _stub_unscoped(monkeypatch, user_id="u2", username="carol")
+    _stub_scopes(monkeypatch, {"p1": ["member"], "p2": ["reader"]})
 
     with pytest.raises(ks_auth.KeystoneAuthError):
         ks_auth.authenticate("carol", "pw")
@@ -117,15 +103,28 @@ def test_authenticate_honors_configured_admin_role(configured_keystone, monkeypa
 
     config_db.set_web_setting("keystone_admin_role", "operator")
 
-    _stub_password(monkeypatch, user_id="u3", username="dave")
-    _stub_session(
-        monkeypatch,
-        assignments=[_assignment("p9", "r-op")],
-        roles_catalog={"r-op": "operator"},
-    )
+    _stub_unscoped(monkeypatch, user_id="u3", username="dave")
+    _stub_scopes(monkeypatch, {"p9": ["operator"]})
 
     identity = ks_auth.authenticate("dave", "pw")
     assert "operator" in identity.role_names
+
+
+def test_role_truncation_audited(configured_keystone, monkeypatch):
+    """More than MAX_SESSION_ROLES roles are truncated, and audited."""
+    from openstack_bi import config_db
+    from openstack_bi.auth import keystone as ks_auth
+
+    _stub_unscoped(monkeypatch, user_id="u9", username="bob")
+    many = ["admin"] + [
+        f"role{i:03d}" for i in range(ks_auth.MAX_SESSION_ROLES + 10)
+    ]
+    _stub_scopes(monkeypatch, {"p1": many})
+
+    identity = ks_auth.authenticate("bob", "pw")
+    assert len(identity.role_names) == ks_auth.MAX_SESSION_ROLES
+    actions = {row["action"] for row in config_db.recent_audit(30)}
+    assert "session_roles_truncated" in actions
 
 
 def test_authenticate_unauthorized(configured_keystone, monkeypatch):
