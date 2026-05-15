@@ -5,27 +5,32 @@ MariaDB replicas plus a shared Keystone directly. Ships a report plugin
 architecture so new reports plug in without touching the CLI or web UI:
 
 - **CLI** — `opsbi <report>` with a subparser per registered report, plus
-  `opsbi list-regions`, `list-domains`, `list-cells`.
-- **Web** — Flask catalog page; each report has its own form-driven page
-  and one-click Excel download. Charts render in-browser via Chart.js and
+  discovery commands (`list-regions`, `list-domains`, `list-cells`,
+  `list-aggregates`) and configuration commands (`init`, `config`,
+  `admin`, `roles`).
+- **Web** — authenticated Flask app: a report catalog grouped by category,
+  a form-driven page per report with one-click Excel download, a first-run
+  setup wizard, and admin pages. Charts render in-browser via Chart.js and
   are embedded as PNGs in the Excel export.
 
 ## Reports
 
-| ID | Purpose |
-| --- | --- |
-| `issues` | Cross-service health dashboard (error VMs, stuck states, orphaned volumes, old unbound FIPs, stale snapshots) grouped by severity. |
-| `qemu_lifetime` | Last start/stop/shelve/unshelve/shelveOffload/live-migration per instance, grouped by project. |
-| `instance_leaderboard` | Projects ranked by instance count across regions, broken down by vm_state. |
-| `project_growth` | Per-project concurrent instance count over time, derived from `instances.created_at` / `deleted_at`. |
-| `snapshot_leaderboard` | Projects ranked by Cinder + Glance snapshot footprint; oldest-snapshot age flagged. |
-| `stale_snapshots` | Cinder snapshots older than N days, one row per snapshot, grouped by project. |
-| `fip_audit` | Unbound floating IPs per project, sorted oldest-first. |
-| `fip_pools` | Per-region external-network FIP pool utilization. |
-| `fip_subnets` | Per-subnet, per-allocation-pool drill-down of FIP-bearing external networks (CIDR, gateway, range bounds, used vs. free). Per-region TOTAL row. |
-| `instance_history` | Full Nova action log for one instance UUID (drill-down). |
-| `volume_history` | Cinder metadata + attachment timeline for one volume UUID (drill-down). |
-| `volume_resizes` | Cinder extend events in the last N days (limited by `cinder.messages` retention). |
+| ID | Category | Purpose |
+| --- | --- | --- |
+| `issues` | Findings | Cross-service health check — instances in error, stuck task_states, volumes in transient/orphaned states, long-unbound floating IPs, stale snapshots. One row per finding with severity. |
+| `qemu_lifetime` | Lifecycle | Last start/stop/shelve/unshelve/shelveOffload/live-migration event per instance, grouped by project. Filter by domain, state, min-age, and region. |
+| `domain_leaderboard` | Projects | Keystone domains ranked by instance count across the selected regions, broken down by vm_state. Drill into a domain's project breakdown. |
+| `instance_leaderboard` | Projects | Projects ranked by instance count across the selected regions, broken down by vm_state. |
+| `project_growth` | Projects | Per-project concurrent instance count over time, reconstructed from `instances.created_at` / `deleted_at`. Line chart for the top-N projects. |
+| `snapshot_leaderboard` | Projects | Projects ranked by Cinder + Glance snapshot count and storage footprint; oldest-snapshot age flagged. |
+| `stale_snapshots` | Capacity | Cinder volume snapshots older than N days (default 90), one row per snapshot, sorted oldest-first. |
+| `fip_audit` | Capacity | Unbound floating IPs per project and region, sorted oldest-first. |
+| `fip_pools` | Capacity | Per-region external-network FIP pool utilization (used / free / bound / unbound). |
+| `fip_subnets` | Capacity | Per-subnet, per-allocation-pool drill-down of FIP-bearing external networks (CIDR, gateway, range bounds, used vs. free). Per-region TOTAL row. |
+| `instance_history` | Lifecycle | Full Nova `instance_actions` log for one instance UUID, across every region and cell (drill-down). |
+| `volume_history` | Lifecycle | Cinder metadata + attachment timeline for one volume UUID (drill-down). |
+| `volume_resizes` | Lifecycle | Cinder volume extend events in the last N days (limited by `cinder.messages` retention). |
+| `spla_instances` | Licensing | Active VMs whose boot volume's Glance image name matches a configurable LIKE pattern (default `%SPLA%`); per-region vCPU/memory rollups. |
 
 ## Why query the DB instead of the API or virsh?
 
@@ -42,14 +47,18 @@ event so operator-initiated moves show up.
 
 ## Requirements
 
-- Python 3.8+.
+- Python 3.8+ (the Docker image ships 3.12).
 - A MariaDB replica per OpenStack region, each holding that region's
-  `nova_api` and `nova_cell*` DBs. One of them (or a separate shared
-  replica) must also host the shared `keystone` DB.
+  `nova_api`, `nova_cell*`, `cinder`, `glance`, and `neutron` schemas.
+  One replica (or a separate shared replica) must also host the shared
+  `keystone` schema.
 - A DB user with `SELECT` on those schemas. Per-region credentials are
   supported.
-- MariaDB 10.2+ (the query uses CTEs and window functions). Anything
+- MariaDB 10.2+ (the queries use CTEs and window functions). Anything
   Ussuri-era and newer is fine.
+- A reachable Keystone v3 auth endpoint if you want Keystone users to log
+  into the web UI. Local administrator accounts work without it, but the
+  setup wizard asks for the Keystone URL.
 
 ## Install
 
@@ -61,85 +70,182 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-`pip install -e .` puts the `opsbi` console command on your PATH and
-pulls in runtime deps (PyMySQL, Flask, openpyxl, python-dotenv,
-matplotlib). `pip install -r requirements.txt` still works if you prefer
-not to install the package itself — in that case, invoke via
-`python -m openstack_bi.cli` instead of `opsbi`.
+`pip install -e .` puts the `opsbi` console command on your PATH and pulls
+in the runtime dependencies (Flask, Flask-WTF, PyMySQL, keystoneauth1,
+requests, openpyxl, matplotlib, waitress). If you'd rather not install the
+package itself, `pip install -r requirements.txt` installs the same set —
+then invoke the CLI as `python -m openstack_bi.cli` instead of `opsbi`.
+
+Either way, the next step is to initialize the configuration store and run
+the setup wizard — see [Configuration](#configuration). For a
+container-based deploy, skip to [Docker deployment](#docker-deployment).
+
+## Docker deployment
+
+For a production-style deploy, run the app as a container instead of a
+host virtualenv. The repo ships a production-ready image —
+`python:3.12-slim`, served by `waitress` (a production WSGI server),
+running as a non-root user, applying DB migrations on every start.
+
+### docker compose (recommended)
+
+```
+docker compose up -d
+```
+
+Builds the image from this repo, starts a single `opsbi` container, and
+serves the web UI on port 8000. The configuration database (regions,
+schema names, Keystone URL, local administrators, role mappings, audit
+log) lives in the `opsbi-config` named volume, so it survives container
+restarts and image rebuilds.
+
+### Standalone container
+
+Compose is only a thin wrapper — the image runs on its own:
+
+```
+docker build -t openstack-ops-bi .
+docker run -d --name opsbi \
+  -p 8000:8000 \
+  -v opsbi-config:/var/lib/opsbi \
+  --restart unless-stopped \
+  openstack-ops-bi
+```
+
+Either way, browse to `http://<host>:8000/` to complete the first-run
+setup wizard. The container must be able to reach the per-region MariaDB
+replicas and the Keystone endpoint; if those sit on private networks
+unreachable from the default Docker bridge, attach an external Docker
+network or run with `--network host`.
+
+See [BOOTSTRAP.md](BOOTSTRAP.md) for host bind-mount options, running
+`opsbi` CLI subcommands inside the container, TLS/reverse-proxy setup,
+and how to reset the configuration database.
 
 ## Configuration
 
-All config is via environment variables. The CLI and web app auto-load a
-`.env` file from the current working directory; real env vars still take
-precedence, so you can override per-run.
+There is no `.env` file and no service-specific environment variables.
+All configuration — regions and their MariaDB credentials, per-service
+schema names, the Keystone auth URL, local administrator accounts, the
+role-to-capability mapping, and the audit log — lives in a single SQLite
+file (`opsbi.sqlite` by default). It is created and migrated by
+`opsbi init` and edited three ways:
 
-### Multi-region (recommended)
+- the **first-run web setup wizard** at `/setup`,
+- the **Admin** pages in the web UI, and
+- the `opsbi config`, `opsbi admin`, and `opsbi roles` CLI subcommands.
 
-```
-OS_DB_REGIONS=dfw1,ord1
-KEYSTONE_REGION=dfw1            # which region's replica reaches `keystone`
+### Environment variables
 
-OS_DB_HOST__DFW1=replica-dfw1.internal
-OS_DB_PORT__DFW1=3306
-OS_DB_USER__DFW1=reporting
-OS_DB_PASSWORD__DFW1=...
+Only two environment variables are read, both optional:
 
-OS_DB_HOST__ORD1=replica-ord1.internal
-OS_DB_USER__ORD1=reporting
-OS_DB_PASSWORD__ORD1=...
+| Variable             | Default          | Purpose |
+| -------------------- | ---------------- | ------- |
+| `OPSBI_CONFIG_DB`    | `./opsbi.sqlite` | Path to the configuration SQLite file. |
+| `OPSBI_BIND_ADDRESS` | *(unset)*        | `host:port` for `waitress-serve` in the Docker image. Ignored by `python web.py`, which reads `bind_host` / `bind_port` from the config DB. |
 
-# Optional fallbacks (used when per-region value is missing)
-OS_DB_PORT=3306
-OS_DB_USER=reporting
-```
+### First-run setup wizard
 
-Per-region suffix convention: `<REGION_NAME>` uppercased, with any non-
-alphanumeric character replaced by an underscore — so `dfw1` → `DFW1`,
-`us-east-2` → `US_EAST_2`.
+After `opsbi init`, start the web UI and browse to `http://<host>:<port>/`.
+With no administrator configured, every request is routed to the wizard,
+which walks through four steps:
 
-### Single-region (legacy / backwards compatible)
+1. Create the first local administrator account.
+2. Add at least one region (host, port, DB credentials) and mark which
+   region's replica reaches the shared `keystone` schema.
+3. Confirm or edit the per-service schema names (`keystone`, `nova_api`,
+   `cinder`, `glance`, `neutron`).
+4. Set the Keystone v3 auth URL and default user domain.
 
-If `OS_DB_REGIONS` is unset but the bare `OS_DB_HOST` / `OS_DB_USER` /
-`OS_DB_PASSWORD` variables are set, a single region named `default` is
-synthesized. Existing deployments keep working without any `.env` changes.
+Every setting is editable afterwards under **Admin** in the top-right
+navigation.
 
-### Variable reference
+### Migrating a legacy `.env`
 
-| Variable                 | Default     | Purpose                                                |
-| ------------------------ | ----------- | ------------------------------------------------------ |
-| `OS_DB_REGIONS`          | *(unset)*   | Comma-separated region names. Empty ⇒ single-region fallback. |
-| `KEYSTONE_REGION`        | first listed | Region whose replica hosts shared `keystone`.         |
-| `OS_DB_HOST__<REGION>`   | `127.0.0.1` | Replica host for one region.                           |
-| `OS_DB_PORT__<REGION>`   | `3306`      | Replica port for one region.                           |
-| `OS_DB_USER__<REGION>`   | `nova`      | DB user for one region.                                |
-| `OS_DB_PASSWORD__<REGION>` | *(empty)* | DB password for one region.                            |
-| `OS_DB_HOST`, etc.       | —           | Fallback values if a per-region variable is missing.   |
-| `KEYSTONE_DB`            | `keystone`  | Keystone schema name.                                  |
-| `NOVA_API_DB`            | `nova_api`  | Used for cell auto-discovery.                          |
-| `QLR_HOST`               | `127.0.0.1` | `web.py` bind host.                                    |
-| `QLR_PORT`               | `8000`      | `web.py` bind port.                                    |
-
-### `.env` file (recommended)
+Earlier versions read configuration from environment variables / a `.env`
+file. To carry an old `.env` into the SQLite store:
 
 ```
-cp .env.example .env
-$EDITOR .env
+opsbi init
+opsbi config import-env --env-file ./.env
 ```
 
-`.env` is gitignored. Overriding for a single run:
+This imports the regions, the Keystone region, and the schema names.
+Complete the remaining wizard steps (admin account, Keystone URL)
+afterwards.
+
+### File permissions
+
+`opsbi.sqlite` holds region MariaDB credentials and the Flask session
+signing key. The app warns at startup if the file is world-readable and
+refuses to start if it is world-writable (or group-writable and owned by
+another user):
 
 ```
-OS_DB_PASSWORD__DFW1=oneoff opsbi list-domains
+chmod 600 opsbi.sqlite
 ```
+
+Under Docker the file lives on a named volume owned by UID/GID 10001 and
+Docker handles the permissions for you. See [BOOTSTRAP.md](BOOTSTRAP.md)
+for the full deployment and first-run guide.
+
+## Authentication & access control
+
+The web UI requires a login. Two kinds of accounts are supported:
+
+- **Local administrators** — username/password stored hashed in the
+  config DB. Created by the setup wizard, the **Admin → Administrators**
+  page, or `opsbi admin create`. Local admins implicitly hold every
+  capability.
+- **Keystone users** — anyone with credentials in the configured
+  Keystone v3 endpoint. They sign in with their Keystone username,
+  password, and (optionally) domain.
+
+Authorization above plain login is capability-based. Capabilities are
+fixed in code; admins map Keystone **role names** to them under
+**Admin → Roles** or with `opsbi roles grant`:
+
+| Capability          | Grants |
+| ------------------- | ------ |
+| `view_all_projects` | Bypass per-user project scoping in reports that support it. |
+| `manage_config`     | Edit regions, schema names, Keystone settings, and the role mapping. |
+| `manage_users`      | Create, reset, and remove local administrators. |
+| `view_audit_log`    | Read the configuration / authentication audit log. |
+
+In the web catalog, local admins see every report. Keystone users see
+only reports that opt into project scoping (currently `instance_history`),
+and their results are limited to the projects they hold Keystone roles on
+— unless granted `view_all_projects`. The CLI is not gated: it runs as
+whoever has shell access and is treated as root-equivalent.
 
 ## CLI usage
 
-```
-# list what's configured / reachable
-opsbi list-regions
-opsbi list-domains
-opsbi list-cells
+### Setup & administration
 
+```
+opsbi init                       # create + migrate ./opsbi.sqlite
+opsbi config show                # print the active configuration
+opsbi config import-env --env-file ./.env
+opsbi admin create alice         # create a local administrator (prompts for password)
+opsbi admin list
+opsbi admin reset-password alice
+opsbi roles capabilities         # list the capability registry
+opsbi roles grant reader view_all_projects
+opsbi roles list
+```
+
+### Discovery
+
+```
+opsbi list-regions               # configured regions
+opsbi list-domains               # enabled Keystone domains
+opsbi list-cells                 # Nova cell DBs per region
+opsbi list-aggregates            # Nova host aggregates per region
+```
+
+### Running reports
+
+```
 # show all registered reports
 opsbi --help
 
@@ -157,9 +263,10 @@ opsbi qemu-lifetime --domain heroes --regions dfw1 --regions ord1 \
 opsbi qemu-lifetime --domain heroes --state __all__
 ```
 
-Output is grouped per the report (the qemu-lifetime report groups by
-project; other reports may be flat). For each grouped section, rows
-come back pre-sorted by the report.
+Report subcommand names are the report ID with underscores replaced by
+hyphens (`qemu_lifetime` → `qemu-lifetime`). Output is grouped per the
+report (the qemu-lifetime report groups by project; other reports may be
+flat). For each grouped section, rows come back pre-sorted by the report.
 
 **qemu-lifetime filters:**
 
@@ -174,14 +281,21 @@ come back pre-sorted by the report.
 ## Web usage
 
 ```
+opsbi init
 python web.py
-# → http://127.0.0.1:8000/
+# → serves on the bind_host/bind_port from the config DB
+#   (127.0.0.1:8000 until you change it)
 ```
 
-Landing page is a report catalog. Click a report, fill in its form,
-click **Run report**. Results render in-page; charts (where the report
-defines any) render via vendored Chart.js. Click **Download Excel** to
-get an `.xlsx` with:
+`python web.py` is the Flask development server. It reads its listen
+address from the `bind_host` / `bind_port` web settings — set those in the
+wizard or with `opsbi config set bind_host 0.0.0.0`.
+
+The landing page is a login screen (or the setup wizard until it is
+complete). After signing in you get the report catalog, grouped by
+category. Click a report, fill in its form, click **Run report**. Results
+render in-page; charts (where the report defines any) render via vendored
+Chart.js. Click **Download Excel** to get an `.xlsx` with:
 
 - Metadata header at the top (all report metadata + generated-at
   timestamp).
@@ -189,19 +303,16 @@ get an `.xlsx` with:
 - One sheet per chart, with a matplotlib-rendered PNG plus the raw
   series data below it for spreadsheet formulas.
 
-Bind elsewhere:
-
-```
-QLR_HOST=0.0.0.0 QLR_PORT=8000 python web.py
-```
-
 For a long-running deployment, use a production WSGI server instead of the
 Flask dev server (no code changes needed):
 
 ```
-pip install waitress
-waitress-serve --host=0.0.0.0 --port=8000 web:app
+waitress-serve --listen=0.0.0.0:8000 web:app
 ```
+
+The `OPSBI_BIND_ADDRESS` environment variable lets the Docker image pass
+the listen address through to waitress. For containerized deploys see
+[Docker deployment](#docker-deployment) and [BOOTSTRAP.md](BOOTSTRAP.md).
 
 ## QEMU lifetime — actions tracked
 
@@ -223,8 +334,8 @@ export all read from it.
 
 ## How it works
 
-1. Per-region connection details come from env/`.env` (parsed by
-   `openstack_bi.config` into `Region` objects).
+1. Per-region connection details come from the SQLite configuration
+   store, loaded by `openstack_bi.config` into `Region` objects.
 2. Each report is a `Report` subclass registered in
    `openstack_bi/reports/__init__.py`. It declares params; the CLI and
    web UI render those params into their respective input surfaces.
@@ -253,28 +364,38 @@ export all read from it.
 ```
 openstack_bi/
   config.py         Region dataclass; parse_regions(); keystone_region()
+  config_db.py      SQLite configuration store + migration runner
   db.py             connect/query against one (region, database)
   openstack.py      shared Keystone + Nova cell queries
   util.py           humanize, annotate_ages
-  cli.py            `opsbi` entry: argparse subparsers per report
+  cli.py            `opsbi` entry: report subparsers + admin/config/roles
+  auth/
+    capabilities.py fixed capability registry
+    keystone.py     Keystone v3 password auth + role/project resolution
+    local.py        local administrator accounts (hashed passwords)
+    session.py      Flask session helpers + capability decorators
   reports/
     __init__.py     registry — add new report modules here
     base.py         Report ABC + Param/ReportResult/ChartSpec
-    qemu_lifetime.py
+    qemu_lifetime.py  ... (one module per report)
   web/
-    __init__.py     Flask app factory
+    __init__.py     Flask app factory + auth/setup gate
     routes.py       catalog + per-report runner + Excel export
+    auth_routes.py  login / logout
+    setup_routes.py first-run setup wizard
+    admin_routes.py admin pages (regions, schemas, keystone, users, roles, audit)
     forms.py        request.args → report kwargs + form-values echo
     excel.py        generic .xlsx with matplotlib chart embedding
-templates/
-  base.html         layout + CSS
-  catalog.html      report catalog
-  report.html       form + results + Chart.js canvases
+migrations/         NNNN_*.sql config-DB schema migrations
+templates/          base/catalog/report/login + admin/ + setup/ subdirs
 static/
   chart.min.js      vendored Chart.js
 web.py              entry shim: `waitress-serve web:app`, `python web.py`
-pyproject.toml      exposes `opsbi` console script
-requirements.txt    runtime deps
+Dockerfile          production container image
+docker-compose.yml  single-container Compose deployment
+BOOTSTRAP.md        deployment + first-run guide
+pyproject.toml      package metadata; exposes the `opsbi` console script
+requirements.txt    runtime deps (mirrors pyproject.toml)
 ```
 
 ## Limitations and notes
@@ -289,11 +410,13 @@ requirements.txt    runtime deps
 - **`cell0` is included.** It normally holds failed-to-schedule instances
   with no lifecycle data; cost is negligible.
 - **Shared Keystone assumed.** Project IDs are expected to be globally
-  unique across regions. The report resolves project names once from
-  `KEYSTONE_REGION` rather than cross-DB-joining per cell, so Keystone
+  unique across regions. Reports resolve project names once from the
+  Keystone region rather than cross-DB-joining per cell, so Keystone
   and Nova can live on different physical replicas.
-- **The web UI is unauthenticated** and binds to `127.0.0.1` by default.
-  Put it behind auth (basic-auth reverse proxy, SSO) or keep it local
-  before exposing widely.
-- **Read-only replica assumption.** Nothing in this project writes; point
-  it at replicas to keep the control plane out of the hot path.
+- **The web UI requires login** (local administrator or Keystone user).
+  It speaks plain HTTP and `python web.py` binds to `127.0.0.1` by
+  default — terminate TLS at a reverse proxy before exposing it widely.
+- **Read-only replica assumption.** Nothing in this project writes to the
+  OpenStack databases; point it at replicas to keep the control plane out
+  of the hot path.
+```
