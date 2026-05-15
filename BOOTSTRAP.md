@@ -117,9 +117,15 @@ top-right navigation.
 * **Local administrators** — username/password stored in the configuration
   database. Created via the wizard, the **Admin → Administrators** page,
   or `opsbi admin create`.
-* **Keystone users** — anyone with credentials in the configured Keystone.
-  Their report visibility is scoped to the projects they have effective
-  roles on.
+* **Keystone users** — OpenStack users who hold the **admin role**. Login
+  is rejected unless the user holds the role configured under
+  **Admin → Keystone** (`keystone_admin_role`, default `admin`); a
+  Keystone login is treated as an administrator.
+
+A Keystone login keeps the user's project-scoped token in server memory
+so the SPLA report's live-migration and console actions can call the Nova
+API on their behalf. The token is dropped on logout and on a container
+restart (re-login restores it).
 
 ## Migrating an existing `.env`
 
