@@ -119,8 +119,10 @@ top-right navigation.
   or `opsbi admin create`.
 * **Keystone users** — OpenStack users who hold the **admin role**. Login
   is rejected unless the user holds the role configured under
-  **Admin → Keystone** (`keystone_admin_role`, default `admin`); a
-  Keystone login is treated as an administrator.
+  **Admin → Keystone** (`keystone_admin_role`, default `admin`). They see
+  every report and can run the instance actions, but the **Admin** pages
+  (application configuration) are reserved for local administrators — a
+  Keystone session has no Admin menu.
 
 A Keystone login keeps the user's project-scoped token in server memory
 so the SPLA report's live-migration and console actions can call the Nova

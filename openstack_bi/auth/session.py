@@ -92,6 +92,18 @@ def is_admin() -> bool:
     return bool(info and info.get("is_admin"))
 
 
+def is_local_admin() -> bool:
+    """True only for local-administrator sessions.
+
+    Keystone sessions are privileged — they see every report and can run
+    the instance actions — but they are *not* application administrators:
+    the configuration surface (regions, schema names, Keystone settings,
+    local accounts, audit log) is reserved for local accounts.
+    """
+    info = current_user()
+    return bool(info and info.get("kind") == "local" and info.get("is_admin"))
+
+
 def current_capabilities() -> FrozenSet[str]:
     """Capabilities held by the current request's user.
 
@@ -163,6 +175,31 @@ def admin_required(view: Callable) -> Callable:
             return redirect(url_for("login", next=request.path))
         if not info.get("is_admin"):
             flash("Administrator access is required for that page.", "error")
+            return redirect(url_for("catalog"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def local_admin_required(view: Callable) -> Callable:
+    """Gate a view on a local-administrator session.
+
+    The application-configuration surface is local-admin only. Keystone
+    sessions — privileged though they are — are bounced to the catalog.
+    """
+
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        info = current_user()
+        if info is None:
+            flash("Please sign in to continue.", "info")
+            return redirect(url_for("login", next=request.path))
+        if info.get("kind") != "local":
+            flash(
+                "Application configuration is restricted to local "
+                "administrators.",
+                "error",
+            )
             return redirect(url_for("catalog"))
         return view(*args, **kwargs)
 

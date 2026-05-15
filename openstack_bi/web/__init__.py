@@ -19,12 +19,12 @@ from flask import Flask, redirect, request, url_for
 from flask_wtf.csrf import CSRFProtect
 
 from .. import config_db
-from ..auth.capabilities import Capability
 from ..auth.session import (
     current_capabilities,
     current_user,
     filter_visible_reports,
     is_admin,
+    is_local_admin,
 )
 
 log = logging.getLogger(__name__)
@@ -100,13 +100,9 @@ def create_app() -> Flask:
             "setup_status": config_db.setup_status(),
             "config_db_path": str(config_db.db_path()),
             "current_caps": caps,
-            "has_admin_access": any(
-                c in caps for c in (
-                    Capability.MANAGE_CONFIG.value,
-                    Capability.MANAGE_USERS.value,
-                    Capability.VIEW_AUDIT_LOG.value,
-                )
-            ),
+            # The Admin menu / configuration surface is local-admin only;
+            # Keystone sessions are privileged report users, not app admins.
+            "has_admin_access": is_local_admin(),
         }
 
     @app.before_request

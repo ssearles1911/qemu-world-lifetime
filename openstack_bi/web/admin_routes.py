@@ -13,7 +13,7 @@ from ..auth.capabilities import (
     Capability,
     is_known_capability,
 )
-from ..auth.session import current_user, requires_capability
+from ..auth.session import current_user, local_admin_required
 
 # SQL identifier shape — schema names can't be parameterized in MariaDB,
 # so admin-supplied values that get spliced into a query must match this.
@@ -45,15 +45,7 @@ def register(app: Flask) -> None:
     app.add_url_rule("/admin/audit", view_func=audit, endpoint="admin_audit")
 
 
-def _admin_index_caps_required():
-    return (
-        Capability.MANAGE_CONFIG.value,
-        Capability.MANAGE_USERS.value,
-        Capability.VIEW_AUDIT_LOG.value,
-    )
-
-
-@requires_capability(*_admin_index_caps_required())
+@local_admin_required
 def index():
     return render_template(
         "admin/index.html",
@@ -61,7 +53,7 @@ def index():
     )
 
 
-@requires_capability(Capability.MANAGE_CONFIG.value)
+@local_admin_required
 def regions():
     if request.method == "POST":
         action = request.form.get("action") or "save"
@@ -104,7 +96,7 @@ def regions():
     )
 
 
-@requires_capability(Capability.MANAGE_CONFIG.value)
+@local_admin_required
 def schemas():
     if request.method == "POST":
         for service in ("keystone", "nova_api", "cinder", "glance", "neutron"):
@@ -136,7 +128,7 @@ def schemas():
     )
 
 
-@requires_capability(Capability.MANAGE_CONFIG.value)
+@local_admin_required
 def keystone():
     if request.method == "POST":
         url = (request.form.get("keystone_auth_url") or "").strip()
@@ -163,7 +155,7 @@ def keystone():
     )
 
 
-@requires_capability(Capability.MANAGE_USERS.value)
+@local_admin_required
 def admins():
     if request.method == "POST":
         action = request.form.get("action") or "create"
@@ -209,7 +201,7 @@ def admins():
     )
 
 
-@requires_capability(Capability.VIEW_AUDIT_LOG.value)
+@local_admin_required
 def audit():
     return render_template(
         "admin/audit.html",
@@ -217,7 +209,7 @@ def audit():
     )
 
 
-@requires_capability(Capability.MANAGE_CONFIG.value)
+@local_admin_required
 def roles():
     """Edit which Keystone role names grant which capabilities.
 
