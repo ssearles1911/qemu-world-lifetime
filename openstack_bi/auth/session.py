@@ -6,7 +6,7 @@ The session payload looks like:
         "kind": "local" | "keystone",
         "user_id": str,             # local user id (as str) or keystone user id
         "username": str,
-        "is_admin": bool,           # True for local admins; False for keystone users
+        "is_admin": bool,           # True for local admins and Keystone admins
         "project_ids": list[str],   # keystone-only; admins have unscoped access
         "domain_id": str | None,    # keystone-only
         "roles": list[str],         # keystone-only; lowercased Keystone role names
@@ -21,6 +21,7 @@ from typing import Callable, FrozenSet, Iterable, Optional, Set
 from flask import flash, g, redirect, request, session, url_for
 
 from .. import config_db
+from . import token_store
 from .capabilities import ALL_CAPABILITIES, Capability
 from .keystone import KeystoneIdentity
 
@@ -47,11 +48,17 @@ def login_keystone(identity: KeystoneIdentity) -> None:
         "kind": "keystone",
         "user_id": identity.user_id,
         "username": identity.username,
-        "is_admin": False,
+        # Keystone login is gated on the admin role (see auth.keystone),
+        # so a successful Keystone session is an administrator.
+        "is_admin": True,
         "project_ids": sorted(identity.project_ids),
         "domain_id": identity.domain_id,
         "roles": sorted(identity.role_names),
     }
+    # Keep the scoped token server-side; the cookie carries only its key.
+    scoped = getattr(identity, "scoped_access", None)
+    if scoped is not None:
+        session["ks_token_key"] = token_store.put(scoped)
     session.permanent = True
 
 
@@ -64,6 +71,7 @@ def logout() -> None:
             "logout",
             "",
         )
+    token_store.discard(session.get("ks_token_key"))
     session.clear()
 
 

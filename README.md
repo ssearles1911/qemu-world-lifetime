@@ -30,7 +30,7 @@ architecture so new reports plug in without touching the CLI or web UI:
 | `instance_history` | Lifecycle | Full Nova `instance_actions` log for one instance UUID, across every region and cell (drill-down). |
 | `volume_history` | Lifecycle | Cinder metadata + attachment timeline for one volume UUID (drill-down). |
 | `volume_resizes` | Lifecycle | Cinder volume extend events in the last N days (limited by `cinder.messages` retention). |
-| `spla_instances` | Licensing | Active VMs whose boot volume's Glance image name matches a configurable LIKE pattern (default `%SPLA%`); per-region vCPU/memory rollups. |
+| `spla_instances` | Licensing | Active VMs whose boot volume's Glance image name matches a configurable LIKE pattern (default `%SPLA%`); per-region vCPU/memory rollups. Keystone sessions get per-row live-migrate / console actions. |
 
 ## Why query the DB instead of the API or virsh?
 
@@ -71,10 +71,11 @@ pip install -e .
 ```
 
 `pip install -e .` puts the `opsbi` console command on your PATH and pulls
-in the runtime dependencies (Flask, Flask-WTF, PyMySQL, keystoneauth1,
-requests, openpyxl, matplotlib, waitress). If you'd rather not install the
-package itself, `pip install -r requirements.txt` installs the same set —
-then invoke the CLI as `python -m openstack_bi.cli` instead of `opsbi`.
+in the runtime dependencies (Flask, Flask-WTF, Werkzeug, PyMySQL,
+keystoneauth1, requests, openpyxl, matplotlib, waitress). If you'd rather
+not install the package itself, `pip install -r requirements.txt` installs
+the same set — then invoke the CLI as `python -m openstack_bi.cli` instead
+of `opsbi`.
 
 Either way, the next step is to initialize the configuration store and run
 the setup wizard — see [Configuration](#configuration). For a
@@ -197,26 +198,43 @@ The web UI requires a login. Two kinds of accounts are supported:
   config DB. Created by the setup wizard, the **Admin → Administrators**
   page, or `opsbi admin create`. Local admins implicitly hold every
   capability.
-- **Keystone users** — anyone with credentials in the configured
-  Keystone v3 endpoint. They sign in with their Keystone username,
-  password, and (optionally) domain.
+- **Keystone users** — OpenStack users who hold the **admin role**. They
+  sign in with their Keystone username, password, and (optionally)
+  domain; login is rejected unless the user holds the role named under
+  **Admin → Keystone** (the `keystone_admin_role` setting, default
+  `admin`).
 
-Authorization above plain login is capability-based. Capabilities are
-fixed in code; admins map Keystone **role names** to them under
-**Admin → Roles** or with `opsbi roles grant`:
+Everyone who can sign in is an administrator — they see every report and
+reach the admin pages. The CLI is not gated: it runs as whoever has
+shell access and is treated as root-equivalent.
 
-| Capability          | Grants |
-| ------------------- | ------ |
-| `view_all_projects` | Bypass per-user project scoping in reports that support it. |
-| `manage_config`     | Edit regions, schema names, Keystone settings, and the role mapping. |
-| `manage_users`      | Create, reset, and remove local administrators. |
-| `view_audit_log`    | Read the configuration / authentication audit log. |
+A Keystone login also keeps that user's project-scoped token server-side
+(in process memory, keyed by an opaque cookie value) so the app can call
+the Nova API on their behalf — see [Instance actions](#instance-actions).
+The token is discarded on logout and on app restart, and expires after
+about an hour, after which the action prompts for a fresh sign-in.
 
-In the web catalog, local admins see every report. Keystone users see
-only reports that opt into project scoping (currently `instance_history`),
-and their results are limited to the projects they hold Keystone roles on
-— unless granted `view_all_projects`. The CLI is not gated: it runs as
-whoever has shell access and is treated as root-equivalent.
+> The role → capability mapping (**Admin → Roles**, `opsbi roles`) and
+> the `view_all_projects` / `manage_*` capabilities predate the
+> admin-only Keystone login gate. They remain in the code but no longer
+> affect access now that every login is an administrator.
+
+## Instance actions
+
+When signed in via **Keystone**, the **SPLA-licensed instances** report
+gains an **Actions** column with two per-row operations:
+
+- **Live migrate** — opens an in-page dialog to pick a target host (the
+  `nova-compute` hosts in that instance's region, fetched live from
+  Nova) and starts a live migration — without leaving the report.
+- **Console** — opens the instance's noVNC console in a new browser tab.
+
+Both call the Nova API in the instance's region as the logged-in user,
+via the scoped token kept from login, so the user needs Nova permission
+for the operation (admin under default policy). They require the app's
+region names to match the Keystone catalog region names. In a
+local-administrator session — which has no Keystone token — the buttons
+are shown disabled.
 
 ## CLI usage
 
@@ -367,6 +385,7 @@ openstack_bi/
   config_db.py      SQLite configuration store + migration runner
   db.py             connect/query against one (region, database)
   openstack.py      shared Keystone + Nova cell queries
+  nova.py           Nova compute REST API client (live migration, console)
   util.py           humanize, annotate_ages
   cli.py            `opsbi` entry: report subparsers + admin/config/roles
   auth/
@@ -374,6 +393,7 @@ openstack_bi/
     keystone.py     Keystone v3 password auth + role/project resolution
     local.py        local administrator accounts (hashed passwords)
     session.py      Flask session helpers + capability decorators
+    token_store.py  in-memory scoped Keystone token cache
   reports/
     __init__.py     registry — add new report modules here
     base.py         Report ABC + Param/ReportResult/ChartSpec
@@ -384,6 +404,7 @@ openstack_bi/
     auth_routes.py  login / logout
     setup_routes.py first-run setup wizard
     admin_routes.py admin pages (regions, schemas, keystone, users, roles, audit)
+    instance_routes.py  live-migrate / console Nova actions
     forms.py        request.args → report kwargs + form-values echo
     excel.py        generic .xlsx with matplotlib chart embedding
 migrations/         NNNN_*.sql config-DB schema migrations
@@ -413,10 +434,12 @@ requirements.txt    runtime deps (mirrors pyproject.toml)
   unique across regions. Reports resolve project names once from the
   Keystone region rather than cross-DB-joining per cell, so Keystone
   and Nova can live on different physical replicas.
-- **The web UI requires login** (local administrator or Keystone user).
-  It speaks plain HTTP and `python web.py` binds to `127.0.0.1` by
-  default — terminate TLS at a reverse proxy before exposing it widely.
-- **Read-only replica assumption.** Nothing in this project writes to the
-  OpenStack databases; point it at replicas to keep the control plane out
-  of the hot path.
+- **The web UI requires login** (local administrator or a Keystone user
+  with the admin role). It speaks plain HTTP and `python web.py` binds to
+  `127.0.0.1` by default — terminate TLS at a reverse proxy before
+  exposing it widely.
+- **Read-only against the databases.** Nothing in this project writes to
+  the OpenStack databases; point it at replicas. The one exception to
+  "no control-plane impact" is the SPLA report's instance actions, which
+  call the Nova API (live migration, console) on the user's behalf.
 ```

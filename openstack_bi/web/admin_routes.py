@@ -141,11 +141,13 @@ def keystone():
     if request.method == "POST":
         url = (request.form.get("keystone_auth_url") or "").strip()
         domain = (request.form.get("keystone_default_domain") or "Default").strip()
+        admin_role = (request.form.get("keystone_admin_role") or "admin").strip()
         if not url:
             flash("Keystone auth URL is required.", "error")
         else:
             config_db.set_web_setting("keystone_auth_url", url)
             config_db.set_web_setting("keystone_default_domain", domain or "Default")
+            config_db.set_web_setting("keystone_admin_role", admin_role or "admin")
             config_db.record_audit("system", None, "keystone_settings_updated", url)
             flash("Keystone settings saved.", "success")
         return redirect(url_for("admin_keystone"))
@@ -154,6 +156,9 @@ def keystone():
         keystone_auth_url=config_db.web_setting("keystone_auth_url", "") or "",
         keystone_default_domain=(
             config_db.web_setting("keystone_default_domain", "Default") or "Default"
+        ),
+        keystone_admin_role=(
+            config_db.web_setting("keystone_admin_role", "admin") or "admin"
         ),
     )
 

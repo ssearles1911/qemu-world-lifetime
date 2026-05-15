@@ -282,13 +282,16 @@ def test_role_truncation_audited(tmp_config_db, monkeypatch):
 
     config_db.set_web_setting("keystone_auth_url", "http://kc.example/v3")
 
-    # 60 roles, all distinct.
+    # 60 roles, all distinct. One must be `admin` or the login gate
+    # rejects the user before truncation can happen.
     role_count = 60
     role_assignments = [
         {"scope": {"project": {"id": f"p{i}"}}, "role": {"id": f"r{i}"}}
         for i in range(role_count)
     ]
-    roles = [{"id": f"r{i}", "name": f"role{i:03d}"} for i in range(role_count)]
+    roles = [{"id": "r0", "name": "admin"}] + [
+        {"id": f"r{i}", "name": f"role{i:03d}"} for i in range(1, role_count)
+    ]
 
     _stub_password(monkeypatch)
     _stub_session_endpoints(

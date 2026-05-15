@@ -123,6 +123,14 @@ def run_report(report_id: str):
     )
     numeric_cols = _detect_numeric_cols(result, visible_columns) if result else set()
 
+    # Some reports (SPLA) attach per-row `_console_url` / `_migrate_url`
+    # action targets. When present, report.html renders an Actions column.
+    has_row_actions = bool(
+        result and any(
+            r.get("_console_url") or r.get("_migrate_url") for r in result.rows
+        )
+    )
+
     return render_template(
         "report.html",
         report=report,
@@ -135,6 +143,7 @@ def run_report(report_id: str):
         group_order=group_order,
         visible_columns=visible_columns,
         numeric_cols=numeric_cols,
+        has_row_actions=has_row_actions,
         charts_json=json.dumps(
             [_chart_to_json(c) for c in (result.charts if result else [])]
         ),
