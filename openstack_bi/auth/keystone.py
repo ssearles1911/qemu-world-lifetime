@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 from keystoneauth1 import session as ks_session
 from keystoneauth1.exceptions import (
@@ -53,6 +53,11 @@ class KeystoneIdentity:
     domain_name: Optional[str]
     project_ids: Set[str] = field(default_factory=set)
     role_names: Set[str] = field(default_factory=set)
+    # Project-scoped token + service catalog, used to call Nova on the
+    # user's behalf (live migration, console). None when no scoped token
+    # could be obtained — Nova actions then degrade to a re-login prompt.
+    scoped_access: Optional[Any] = None
+    auth_url: Optional[str] = None
 
 
 def _auth_url() -> str:
@@ -67,6 +72,16 @@ def _auth_url() -> str:
 
 def _default_domain() -> str:
     return (config_db.web_setting("keystone_default_domain") or "Default").strip()
+
+
+def _admin_role_name() -> str:
+    """Keystone role required to sign in (web setting, default `admin`).
+
+    Compared case-insensitively against the lowercased role names the
+    app resolves, so it is normalised to lowercase here too.
+    """
+    raw = (config_db.web_setting("keystone_admin_role") or "").strip().lower()
+    return raw or "admin"
 
 
 def authenticate(username: str, password: str, domain: Optional[str] = None) -> KeystoneIdentity:
@@ -109,7 +124,20 @@ def authenticate(username: str, password: str, domain: Optional[str] = None) -> 
     if not user_id:
         raise KeystoneAuthError("Keystone returned no user id.")
 
-    project_ids, role_names = _effective_assignments(sess, user_id)
+    admin_role = _admin_role_name()
+    project_ids, role_names, admin_project_ids = _effective_assignments(
+        sess, user_id, admin_role
+    )
+
+    # Login gate: only members of the admin role may sign in.
+    if admin_role not in role_names:
+        config_db.record_audit(
+            "keystone", str(user_id), "login_denied_not_admin", username
+        )
+        raise KeystoneAuthError(
+            f"Your account is not authorized — the {admin_role!r} role is "
+            "required to sign in."
+        )
 
     if len(role_names) > MAX_SESSION_ROLES:
         log.warning(
@@ -122,6 +150,12 @@ def authenticate(username: str, password: str, domain: Optional[str] = None) -> 
         )
         role_names = set(sorted(role_names)[:MAX_SESSION_ROLES])
 
+    # Project-scoped token so the app can issue Nova actions (live
+    # migration, console) as this user. Failure here doesn't block login.
+    scoped_access = _scoped_access(
+        auth_url, username, password, user_domain, admin_project_ids, project_ids
+    )
+
     config_db.record_audit("keystone", user_id, "login_success", username)
 
     return KeystoneIdentity(
@@ -131,7 +165,48 @@ def authenticate(username: str, password: str, domain: Optional[str] = None) -> 
         domain_name=domain_obj.get("name"),
         project_ids=project_ids,
         role_names=role_names,
+        scoped_access=scoped_access,
+        auth_url=auth_url,
     )
+
+
+def _scoped_access(
+    auth_url: str,
+    username: str,
+    password: str,
+    user_domain: str,
+    admin_project_ids: Set[str],
+    project_ids: Set[str],
+) -> Optional[Any]:
+    """Authenticate again, scoped to a project, for a Nova-usable token.
+
+    Prefers a project on which the user holds the admin role; falls back
+    to any project. Returns an `AccessInfo`, or None when no project is
+    available or the scoped auth fails — Nova actions then degrade to a
+    re-login prompt rather than breaking login itself.
+    """
+    target = None
+    if admin_project_ids:
+        target = sorted(admin_project_ids)[0]
+    elif project_ids:
+        target = sorted(project_ids)[0]
+    if not target:
+        log.warning("No project available to scope a Nova token to.")
+        return None
+    try:
+        scoped_auth = v3_identity.Password(
+            auth_url=auth_url,
+            username=username,
+            password=password,
+            user_domain_name=user_domain,
+            project_id=target,
+        )
+        scoped_sess = ks_session.Session(auth=scoped_auth)
+        scoped_sess.get_token()
+        return scoped_auth.get_access(scoped_sess)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not obtain a project-scoped token: %s", exc)
+        return None
 
 
 def _v3_base_url() -> str:
@@ -180,31 +255,34 @@ def _extract_role_id(ra: dict) -> Optional[str]:
 
 
 def _effective_assignments(
-    sess: ks_session.Session, user_id: str
-) -> Tuple[Set[str], Set[str]]:
+    sess: ks_session.Session, user_id: str, admin_role: str
+) -> Tuple[Set[str], Set[str], Set[str]]:
     """Walk `/v3/role_assignments?user.id=...&effective=true` once and
-    return `(project_ids, role_names)`.
+    return `(project_ids, role_names, admin_project_ids)`.
 
     `effective=true` expands group memberships, domain-inherited roles,
     and project hierarchies server-side. Role names are resolved via
-    the role-id cache rather than `include_names`.
+    the role-id cache rather than `include_names`. `admin_project_ids`
+    is the subset of `project_ids` on which the user holds `admin_role`
+    — used to pick a project for the scoped Nova token.
     """
     project_ids: Set[str] = set()
     role_names: Set[str] = set()
+    admin_project_ids: Set[str] = set()
 
     url = f"{_v3_base_url()}/role_assignments?user.id={user_id}&effective"
     try:
         resp = sess.get(url, endpoint_filter=None)
     except Exception as exc:  # noqa: BLE001
         log.warning("Could not fetch role_assignments for %s: %s", user_id, exc)
-        return project_ids, role_names
+        return project_ids, role_names, admin_project_ids
 
     if resp.status_code >= 400:
         log.warning(
             "role_assignments returned %s for %s: %s",
             resp.status_code, user_id, resp.text[:200],
         )
-        return project_ids, role_names
+        return project_ids, role_names, admin_project_ids
 
     body = resp.json() or {}
     assignments = body.get("role_assignments", [])
@@ -215,12 +293,15 @@ def _effective_assignments(
     for ra in assignments:
         scope = ra.get("scope") or {}
         proj = scope.get("project") or {}
-        if proj.get("id"):
-            project_ids.add(proj["id"])
+        pid = proj.get("id")
+        if pid:
+            project_ids.add(pid)
         role_id = _extract_role_id(ra)
         if role_id:
             name = role_id_to_name.get(role_id, "").strip().lower()
             if name:
                 role_names.add(name)
+                if name == admin_role and pid:
+                    admin_project_ids.add(pid)
 
-    return project_ids, role_names
+    return project_ids, role_names, admin_project_ids

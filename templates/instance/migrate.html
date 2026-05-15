@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Live migrate — OpenStack Ops BI{% endblock %}
+{% block content %}
+<div class="max-w-lg mx-auto card">
+  <div class="card-body">
+    <h1 class="text-2xl font-semibold mb-1">Live migrate instance</h1>
+    <p class="text-sm text-gray-600 mb-4">
+      Region <strong>{{ region }}</strong>
+    </p>
+
+    <dl class="text-sm mb-4 space-y-1">
+      <div>
+        <dt class="inline text-gray-500">Instance:</dt>
+        <dd class="inline">{{ server.name or '(unnamed)' }}</dd>
+      </div>
+      <div>
+        <dt class="inline text-gray-500">UUID:</dt>
+        <dd class="inline font-mono text-xs">{{ uuid }}</dd>
+      </div>
+      <div>
+        <dt class="inline text-gray-500">Current host:</dt>
+        <dd class="inline">{{ current_host or '(unknown)' }}</dd>
+      </div>
+      <div>
+        <dt class="inline text-gray-500">Status:</dt>
+        <dd class="inline">{{ server.status or '—' }}</dd>
+      </div>
+    </dl>
+
+    {% if candidates %}
+      <form method="post" class="space-y-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="block">
+          <span class="text-sm font-medium">Target compute host</span>
+          <select name="target_host" required class="form-select mt-1 w-full">
+            {% for h in candidates %}
+              <option value="{{ h.host }}">
+                {{ h.host }}{% if h.status != 'enabled' or h.state != 'up' %}
+                  — {{ h.status or '?' }}, {{ h.state or '?' }}{% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+        <p class="text-xs text-gray-500">
+          Live migration runs asynchronously. Re-run the SPLA report shortly
+          to confirm the new host.
+        </p>
+        <div class="flex gap-2">
+          <button type="submit" class="btn btn-primary">Start live migration</button>
+          <a href="{{ url_for('run_report', report_id='spla_instances') }}"
+             class="btn btn-outline">Cancel</a>
+        </div>
+      </form>
+    {% else %}
+      <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+        No other compute hosts are available in this region.
+      </p>
+      <a href="{{ url_for('run_report', report_id='spla_instances') }}"
+         class="btn btn-outline mt-3">Back to report</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

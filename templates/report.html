@@ -54,6 +54,33 @@
   </td>
 {%- endmacro %}
 
+{#- Per-row action buttons (live migrate / open console). Rendered only
+    when the report attaches `_console_url` / `_migrate_url` to its rows.
+    The buttons are live for Keystone sessions and disabled otherwise,
+    since the Nova calls need the user's Keystone token. -#}
+{% macro actions_cell(row, is_keystone) -%}
+  {%- set console_url = row.get('_console_url') -%}
+  {%- set migrate_url = row.get('_migrate_url') -%}
+  {%- set on = 'inline-block px-2 py-0.5 text-xs rounded border border-gray-300 text-blue-700 hover:bg-gray-100' -%}
+  {%- set off = 'inline-block px-2 py-0.5 text-xs rounded border border-gray-200 text-gray-400 cursor-not-allowed' -%}
+  <td class="whitespace-nowrap">
+    {%- if console_url -%}
+      {%- if is_keystone -%}
+        <a href="{{ console_url }}" target="_blank" rel="noopener" class="{{ on }}">Console</a>
+      {%- else -%}
+        <span class="{{ off }}" title="Sign in with Keystone to use this">Console</span>
+      {%- endif -%}
+    {%- endif -%}
+    {%- if migrate_url -%}
+      {%- if is_keystone -%}
+        <a href="{{ migrate_url }}" class="{{ on }} ml-1">Live migrate</a>
+      {%- else -%}
+        <span class="{{ off }} ml-1" title="Sign in with Keystone to use this">Live migrate</span>
+      {%- endif -%}
+    {%- endif -%}
+  </td>
+{%- endmacro %}
+
 {% macro field(p, values, choices) -%}
   {% if p.kind == 'select' %}
     <div class="form-group">
@@ -123,6 +150,7 @@
 {%- endmacro %}
 
 {% block content %}
+{% set is_keystone = current_user and current_user.kind == 'keystone' %}
 <h1 class="text-2xl font-semibold mb-1">{{ report.name }}</h1>
 <p class="text-gray-600 mb-4">{{ report.description }}</p>
 
@@ -255,6 +283,9 @@
                 {% for col_key, col_label in visible_columns %}
                   {{ th_cell(col_key, col_label, numeric_cols) }}
                 {% endfor %}
+                {% if has_row_actions %}
+                  <th class="whitespace-nowrap">Actions</th>
+                {% endif %}
               </tr>
             </thead>
             <tbody>
@@ -264,6 +295,7 @@
                   {% for col_key, _ in visible_columns %}
                     {{ td_cell(col_key, r[col_key], numeric_cols, r) }}
                   {% endfor %}
+                  {% if has_row_actions %}{{ actions_cell(r, is_keystone) }}{% endif %}
                 </tr>
               {% endfor %}
             </tbody>

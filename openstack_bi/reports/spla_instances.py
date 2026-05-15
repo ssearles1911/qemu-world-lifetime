@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from openstack_bi import config_db, openstack
 from openstack_bi.config import (
@@ -376,6 +376,17 @@ class SplaInstancesReport(Report):
             if uuid:
                 qs = urlencode({"instance_uuid": uuid})
                 row["uuid_link"] = f"/report/instance_history?{qs}"
+                # Web-only per-row action targets (live migrate / console).
+                # Not declared columns, so the CLI and Excel export ignore
+                # them; report.html renders an Actions column when present.
+                region_name = r.get("region") or ""
+                if region_name:
+                    base = (
+                        f"/instance/{quote(region_name, safe='')}"
+                        f"/{quote(uuid, safe='')}"
+                    )
+                    row["_migrate_url"] = f"{base}/migrate"
+                    row["_console_url"] = f"{base}/console"
             rows_out.append(row)
 
         # Per-region totals: count, sum vCPU, sum memory (GB).

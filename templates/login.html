@@ -5,14 +5,21 @@
   <div class="card-body">
     <h1 class="text-2xl font-semibold mb-1">Sign in</h1>
     <p class="text-sm text-gray-600 mb-6">
-      Use your Keystone credentials, or check
-      <em>Local administrator</em> for a host-local admin account.
+      Choose <em>Keystone</em> to sign in with your OpenStack credentials,
+      or <em>Local administrator</em> for a host-local admin account.
     </p>
 
     <form method="post" action="{{ url_for('login') }}" class="space-y-4">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="next" value="{{ next_url }}">
-      <input type="hidden" name="backend" id="backend-input" value="keystone">
+
+      <label class="block">
+        <span class="text-sm font-medium">Sign in with</span>
+        <select name="backend" id="backend-select" class="form-select mt-1 w-full">
+          <option value="keystone" {% if keystone_configured %}selected{% endif %}>Keystone</option>
+          <option value="local" {% if not keystone_configured %}selected{% endif %}>Local administrator</option>
+        </select>
+      </label>
 
       <label class="block">
         <span class="text-sm font-medium">Username</span>
@@ -35,11 +42,6 @@
         </span>
       </label>
 
-      <label class="flex items-center gap-2 text-sm">
-        <input type="checkbox" id="local-toggle" class="form-checkbox">
-        Local administrator (bypass Keystone)
-      </label>
-
       {% if not keystone_configured %}
         <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
           Keystone is not yet configured. Use the local administrator option.
@@ -53,20 +55,15 @@
 
 <script>
 (function () {
-  var toggle = document.getElementById('local-toggle');
-  var backend = document.getElementById('backend-input');
+  // The backend <select> is submitted directly; this only shows/hides the
+  // Keystone-domain field so the local-admin path isn't cluttered by it.
+  var select = document.getElementById('backend-select');
   var domainRow = document.getElementById('domain-row');
-  if (!toggle || !backend || !domainRow) return;
+  if (!select || !domainRow) return;
   function apply() {
-    if (toggle.checked) {
-      backend.value = 'local';
-      domainRow.style.display = 'none';
-    } else {
-      backend.value = 'keystone';
-      domainRow.style.display = '';
-    }
+    domainRow.style.display = select.value === 'local' ? 'none' : '';
   }
-  toggle.addEventListener('change', apply);
+  select.addEventListener('change', apply);
   apply();
 })();
 </script>
