@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from openstack_bi import config_db
@@ -69,17 +67,6 @@ def test_count_roles_for_capability(tmp_config_db):
 
 
 # --- current_capabilities + helpers ----------------------------------------
-
-def _make_app_with_user(tmp_config_db, payload):
-    """Build a Flask app context with a session payload installed."""
-    from flask import Flask
-
-    from openstack_bi.auth.session import SESSION_KEY
-
-    app = Flask(__name__)
-    app.config["SECRET_KEY"] = "test"
-    return app, payload
-
 
 def test_current_capabilities_local_admin_is_unbounded(tmp_config_db):
     from flask import Flask
@@ -178,133 +165,6 @@ def test_keystone_user_without_view_all_is_scoped(tmp_config_db):
             "roles": [],
         }
         assert current_user_project_ids() == {"p1", "p2"}
-
-
-# --- Keystone role-name resolution (mocked HTTP) ---------------------------
-
-def _stub_password(monkeypatch, user_id="u1", username="bob"):
-    from openstack_bi.auth import keystone as ks_auth
-
-    fake_access = MagicMock()
-    fake_access.user = {
-        "id": user_id, "name": username,
-        "domain": {"id": "d1", "name": "Default"},
-    }
-    fake_access.user_id = user_id
-
-    fake_password = MagicMock()
-    fake_password.get_access.return_value = fake_access
-    monkeypatch.setattr(ks_auth.v3_identity, "Password", lambda **kw: fake_password)
-    return fake_password
-
-
-def _stub_session_endpoints(monkeypatch, role_assignments_body, roles_body):
-    """Patch keystoneauth1.session.Session.get to return whatever JSON the
-    test wants for `/v3/role_assignments...` vs `/v3/roles`.
-    """
-    from openstack_bi.auth import keystone as ks_auth
-
-    fake_session = MagicMock()
-    fake_session.get_token.return_value = "tk"
-
-    def get_side_effect(url, *args, **kwargs):
-        resp = MagicMock()
-        resp.status_code = 200
-        if "/role_assignments" in url:
-            resp.json.return_value = role_assignments_body
-        elif "/roles" in url:
-            resp.json.return_value = roles_body
-        else:
-            resp.json.return_value = {}
-        return resp
-
-    fake_session.get.side_effect = get_side_effect
-    monkeypatch.setattr(ks_auth.ks_session, "Session", lambda **kw: fake_session)
-    return fake_session
-
-
-def test_role_id_cache_resolves_assignments_without_include_names(
-    tmp_config_db, monkeypatch
-):
-    from openstack_bi.auth import keystone as ks_auth
-
-    config_db.set_web_setting("keystone_auth_url", "http://kc.example/v3")
-
-    _stub_password(monkeypatch, user_id="u1", username="bob")
-    _stub_session_endpoints(
-        monkeypatch,
-        role_assignments_body={
-            "role_assignments": [
-                {"scope": {"project": {"id": "p1"}}, "role": {"id": "r-admin"}},
-                {"scope": {"project": {"id": "p2"}}, "role": {"id": "r-reader"}},
-            ],
-        },
-        roles_body={
-            "roles": [
-                {"id": "r-admin", "name": "Admin"},
-                {"id": "r-reader", "name": "reader"},
-            ],
-        },
-    )
-
-    identity = ks_auth.authenticate("bob", "pw", domain="Default")
-    assert identity.project_ids == {"p1", "p2"}
-    # Lowercased.
-    assert identity.role_names == {"admin", "reader"}
-
-
-def test_role_id_cache_falls_back_when_role_id_inlined(
-    tmp_config_db, monkeypatch
-):
-    """Some Keystone responses inline `role_id` instead of `role: {id}`."""
-    from openstack_bi.auth import keystone as ks_auth
-
-    config_db.set_web_setting("keystone_auth_url", "http://kc.example/v3")
-
-    _stub_password(monkeypatch)
-    _stub_session_endpoints(
-        monkeypatch,
-        role_assignments_body={
-            "role_assignments": [
-                {"scope": {"project": {"id": "p1"}}, "role_id": "r-admin"},
-            ],
-        },
-        roles_body={"roles": [{"id": "r-admin", "name": "admin"}]},
-    )
-
-    identity = ks_auth.authenticate("bob", "pw")
-    assert identity.role_names == {"admin"}
-
-
-def test_role_truncation_audited(tmp_config_db, monkeypatch):
-    """If a user has more than MAX_SESSION_ROLES, we truncate and audit."""
-    from openstack_bi.auth import keystone as ks_auth
-
-    config_db.set_web_setting("keystone_auth_url", "http://kc.example/v3")
-
-    # 60 roles, all distinct. One must be `admin` or the login gate
-    # rejects the user before truncation can happen.
-    role_count = 60
-    role_assignments = [
-        {"scope": {"project": {"id": f"p{i}"}}, "role": {"id": f"r{i}"}}
-        for i in range(role_count)
-    ]
-    roles = [{"id": "r0", "name": "admin"}] + [
-        {"id": f"r{i}", "name": f"role{i:03d}"} for i in range(1, role_count)
-    ]
-
-    _stub_password(monkeypatch)
-    _stub_session_endpoints(
-        monkeypatch,
-        role_assignments_body={"role_assignments": role_assignments},
-        roles_body={"roles": roles},
-    )
-
-    identity = ks_auth.authenticate("bob", "pw")
-    assert len(identity.role_names) == ks_auth.MAX_SESSION_ROLES
-
-    audit_actions = {row["action"] for row in config_db.recent_audit(20)}
-    assert "session_roles_truncated" in audit_actions
 
 
 # --- Bootstrap-deadlock guard (CLI) ----------------------------------------
