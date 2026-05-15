@@ -18,8 +18,7 @@ from flask import Flask, abort, flash, redirect, render_template, request, url_f
 
 from .. import config_db
 from ..auth import local as local_auth
-from ..auth.capabilities import Capability
-from ..auth.session import login_local, requires_capability
+from ..auth.session import local_admin_required, login_local
 
 
 _STEP_ORDER = ["admin", "region", "schema", "keystone"]
@@ -61,11 +60,18 @@ def setup_step(step: str):
 
     # The first-run path stays open only as long as no admin exists.
     if status != config_db.SetupStatus.NO_ADMIN:
-        # Past the admin step: every other step is admin-only.
+        # Past the admin step: configuration is local-admin only.
         from ..auth.session import current_user
         info = current_user()
-        if info is None or not info.get("is_admin"):
+        if info is None:
             return redirect(url_for("login", next=request.path))
+        if info.get("kind") != "local":
+            flash(
+                "Application configuration is restricted to local "
+                "administrators.",
+                "error",
+            )
+            return redirect(url_for("catalog"))
 
     handler = {
         "admin": _step_admin,
@@ -77,7 +83,7 @@ def setup_step(step: str):
     return handler()
 
 
-@requires_capability(Capability.MANAGE_CONFIG.value)
+@local_admin_required
 def admin_resume():
     status = config_db.setup_status()
     return redirect(url_for("setup_step", step=_next_step_for_status(status)))

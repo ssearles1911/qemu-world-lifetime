@@ -77,9 +77,17 @@ not install the package itself, `pip install -r requirements.txt` installs
 the same set — then invoke the CLI as `python -m openstack_bi.cli` instead
 of `opsbi`.
 
-Either way, the next step is to initialize the configuration store and run
-the setup wizard — see [Configuration](#configuration). For a
-container-based deploy, skip to [Docker deployment](#docker-deployment).
+Then initialize the configuration store and start the app:
+
+```
+opsbi init        # create ./opsbi.sqlite, apply migrations
+python web.py     # serve on http://127.0.0.1:8000/
+```
+
+Browse to `http://<host>:8000/` to complete the first-run setup wizard
+(see [Configuration](#configuration)). For a production deployment or
+running it as a service, see [Running the app](#running-the-app); for a
+container-based deploy, see [Docker deployment](#docker-deployment).
 
 ## Docker deployment
 
@@ -204,9 +212,13 @@ The web UI requires a login. Two kinds of accounts are supported:
   **Admin → Keystone** (the `keystone_admin_role` setting, default
   `admin`).
 
-Everyone who can sign in is an administrator — they see every report and
-reach the admin pages. The CLI is not gated: it runs as whoever has
-shell access and is treated as root-equivalent.
+Both kinds see every report and can run the
+[instance actions](#instance-actions). **Application configuration** — the
+**Admin** pages (regions, schema names, Keystone settings, local accounts,
+audit log) — is reserved for **local administrators**: a Keystone session
+does not get the Admin menu and cannot reach the config pages. The CLI is
+not gated: it runs as whoever has shell access and is treated as
+root-equivalent.
 
 A Keystone login also keeps that user's project-scoped token server-side
 (in process memory, keyed by an opaque cookie value) so the app can call
@@ -214,10 +226,10 @@ the Nova API on their behalf — see [Instance actions](#instance-actions).
 The token is discarded on logout and on app restart, and expires after
 about an hour, after which the action prompts for a fresh sign-in.
 
-> The role → capability mapping (**Admin → Roles**, `opsbi roles`) and
-> the `view_all_projects` / `manage_*` capabilities predate the
-> admin-only Keystone login gate. They remain in the code but no longer
-> affect access now that every login is an administrator.
+> The role → capability mapping (**Admin → Roles**, `opsbi roles`) and the
+> `view_all_projects` / `manage_*` capabilities predate the admin-only
+> Keystone login gate and no longer affect access. They remain in the
+> code pending removal.
 
 ## Instance actions
 
@@ -296,18 +308,75 @@ flat). For each grouped section, rows come back pre-sorted by the report.
   is older than N days. Instances with *no* recorded lifecycle action are
   anchored to `instances.created_at` so a never-touched VM still shows up.
 
-## Web usage
+## Running the app
+
+After `opsbi init`, start the web app — there is no separate daemon, the
+app *is* the web server. Run either command from the repository root so
+`web.py` is importable and the default `./opsbi.sqlite` is found (or set
+`OPSBI_CONFIG_DB` to an absolute path).
+
+**Development:**
 
 ```
-opsbi init
 python web.py
-# → serves on the bind_host/bind_port from the config DB
-#   (127.0.0.1:8000 until you change it)
 ```
 
-`python web.py` is the Flask development server. It reads its listen
-address from the `bind_host` / `bind_port` web settings — set those in the
-wizard or with `opsbi config set bind_host 0.0.0.0`.
+The Flask development server. It reads its listen address from the
+`bind_host` / `bind_port` web settings (default `127.0.0.1:8000`); change
+them in the setup wizard or with `opsbi config set bind_host 0.0.0.0`.
+
+**Production:**
+
+```
+waitress-serve --listen=0.0.0.0:8000 web:app
+```
+
+`waitress` is a production WSGI server (already a dependency). It does
+*not* read the `bind_host` / `bind_port` settings — pass the address on
+the command line. In the Docker image the `OPSBI_BIND_ADDRESS` environment
+variable supplies it.
+
+Then browse to `http://<host>:8000/` to complete the
+[setup wizard](#configuration).
+
+### Running as a systemd service
+
+To keep the app running across reboots, install it as a `systemd`
+service. Create `/etc/systemd/system/opsbi.service`, adjusting the user
+and paths to your install:
+
+```ini
+[Unit]
+Description=OpenStack Ops BI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=opsbi
+WorkingDirectory=/opt/openstack-ops-bi-suite
+Environment=OPSBI_CONFIG_DB=/opt/openstack-ops-bi-suite/opsbi.sqlite
+ExecStart=/opt/openstack-ops-bi-suite/.venv/bin/waitress-serve --listen=0.0.0.0:8000 web:app
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start it:
+
+```
+sudo systemctl daemon-reload
+sudo systemctl enable --now opsbi
+sudo systemctl status opsbi      # confirm it is running
+journalctl -u opsbi -f           # follow the logs
+```
+
+The app speaks plain HTTP — put a TLS-terminating reverse proxy (nginx,
+Caddy) in front before exposing it beyond localhost. For a container-based
+deploy instead, see [Docker deployment](#docker-deployment) and
+[BOOTSTRAP.md](BOOTSTRAP.md).
+
+## Web usage
 
 The landing page is a login screen (or the setup wizard until it is
 complete). After signing in you get the report catalog, grouped by
@@ -320,17 +389,6 @@ Chart.js. Click **Download Excel** to get an `.xlsx` with:
 - Data sheet with frozen header row and auto-filter on every column.
 - One sheet per chart, with a matplotlib-rendered PNG plus the raw
   series data below it for spreadsheet formulas.
-
-For a long-running deployment, use a production WSGI server instead of the
-Flask dev server (no code changes needed):
-
-```
-waitress-serve --listen=0.0.0.0:8000 web:app
-```
-
-The `OPSBI_BIND_ADDRESS` environment variable lets the Docker image pass
-the listen address through to waitress. For containerized deploys see
-[Docker deployment](#docker-deployment) and [BOOTSTRAP.md](BOOTSTRAP.md).
 
 ## QEMU lifetime — actions tracked
 
