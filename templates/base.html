@@ -41,6 +41,7 @@
           <a href="{{ url_for('catalog') }}" class="flex items-center flex-shrink-0">
             <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Liberty Center One" class="h-8 w-auto">
           </a>
+          {% if current_user %}
           <div class="hidden md:flex space-x-1 lg:space-x-2 items-center">
             <a href="{{ url_for('catalog') }}"
                class="nav-link px-3 py-2 rounded-md hover:bg-primary/80 text-sm{% if request.endpoint == 'catalog' %} active{% endif %}">
@@ -71,6 +72,7 @@
               </div>
             </div>
           </div>
+          {% endif %}
         </div>
         <div class="flex items-center space-x-2 lg:space-x-4 flex-shrink-0">
           {% if has_admin_access %}
