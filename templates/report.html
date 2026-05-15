@@ -73,7 +73,9 @@
     {%- endif -%}
     {%- if migrate_url -%}
       {%- if is_keystone -%}
-        <a href="{{ migrate_url }}" class="{{ on }} ml-1">Live migrate</a>
+        <button type="button" class="{{ on }} ml-1"
+                data-migrate-url="{{ migrate_url }}"
+                data-uuid="{{ row.get('uuid') or '' }}">Live migrate</button>
       {%- else -%}
         <span class="{{ off }} ml-1" title="Sign in with Keystone to use this">Live migrate</span>
       {%- endif -%}
@@ -323,6 +325,43 @@
     </div>
   {% endif %}
 {% endif %}
+
+{% if has_row_actions %}
+{#- In-page live-migration modal. Opened by the per-row "Live migrate"
+    buttons; loads target hosts and submits without leaving the report,
+    so the results table is preserved. -#}
+<div id="migrate-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div class="absolute inset-0 bg-black/50" data-migrate-dismiss></div>
+  <div class="relative card w-full max-w-lg">
+    <div class="card-body">
+      <h2 class="text-lg font-semibold mb-3">Live migrate instance</h2>
+      <dl class="text-sm space-y-1 mb-3">
+        <div>
+          <dt class="inline text-gray-500">Instance:</dt>
+          <dd class="inline" id="migrate-name">—</dd>
+        </div>
+        <div>
+          <dt class="inline text-gray-500">UUID:</dt>
+          <dd class="inline font-mono text-xs" id="migrate-uuid">—</dd>
+        </div>
+        <div>
+          <dt class="inline text-gray-500">Current host:</dt>
+          <dd class="inline" id="migrate-current-host">—</dd>
+        </div>
+      </dl>
+      <div id="migrate-status" class="text-sm mb-3 text-gray-500"></div>
+      <label class="block mb-4" id="migrate-field">
+        <span class="text-sm font-medium">Target compute host</span>
+        <select id="migrate-host" class="form-select mt-1 w-full"></select>
+      </label>
+      <div class="flex gap-2 justify-end">
+        <button type="button" class="btn btn-outline" data-migrate-dismiss>Close</button>
+        <button type="button" class="btn btn-primary" id="migrate-confirm">Start live migration</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -366,6 +405,114 @@
   });
 })();
 </script>
+{% if has_row_actions %}
+<script>
+(function () {
+  // Live-migration modal: open over the report, fetch target hosts, and
+  // submit via fetch() so the results table is never navigated away from.
+  var modal = document.getElementById('migrate-modal');
+  if (!modal) return;
+  var CSRF = {{ csrf_token()|tojson }};
+  var nameEl = document.getElementById('migrate-name');
+  var uuidEl = document.getElementById('migrate-uuid');
+  var hostEl = document.getElementById('migrate-current-host');
+  var statusEl = document.getElementById('migrate-status');
+  var fieldEl = document.getElementById('migrate-field');
+  var selectEl = document.getElementById('migrate-host');
+  var confirmBtn = document.getElementById('migrate-confirm');
+  var activeUrl = null;
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg || '';
+    statusEl.className = 'text-sm mb-3 ' + (
+      kind === 'error' ? 'text-red-700'
+      : kind === 'success' ? 'text-green-700'
+      : 'text-gray-500');
+  }
+  function showForm(visible) {
+    fieldEl.style.display = visible ? '' : 'none';
+    confirmBtn.style.display = visible ? '' : 'none';
+  }
+  function openModal() { modal.classList.remove('hidden'); }
+  function closeModal() { modal.classList.add('hidden'); }
+
+  document.querySelectorAll('button[data-migrate-url]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      activeUrl = btn.getAttribute('data-migrate-url');
+      nameEl.textContent = '…';
+      uuidEl.textContent = btn.getAttribute('data-uuid') || '';
+      hostEl.textContent = '…';
+      selectEl.innerHTML = '';
+      showForm(true);
+      confirmBtn.disabled = true;
+      setStatus('Loading compute hosts…');
+      openModal();
+      fetch(activeUrl, { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.ok) { setStatus(d.error || 'Could not load hosts.', 'error'); showForm(false); return; }
+          nameEl.textContent = (d.server && d.server.name) || '(unnamed)';
+          hostEl.textContent = d.current_host || '(unknown)';
+          if (!d.candidates || !d.candidates.length) {
+            setStatus('No other compute hosts are available in this region.', 'error');
+            showForm(false);
+            return;
+          }
+          d.candidates.forEach(function (h) {
+            var o = document.createElement('option');
+            o.value = h.host;
+            var note = (h.status !== 'enabled' || h.state !== 'up')
+              ? ' — ' + (h.status || '?') + ', ' + (h.state || '?') : '';
+            o.textContent = h.host + note;
+            selectEl.appendChild(o);
+          });
+          setStatus('');
+          confirmBtn.disabled = false;
+        })
+        .catch(function () { setStatus('Could not load hosts.', 'error'); showForm(false); });
+    });
+  });
+
+  confirmBtn.addEventListener('click', function () {
+    if (!activeUrl) return;
+    confirmBtn.disabled = true;
+    setStatus('Starting live migration…');
+    var body = new URLSearchParams();
+    body.set('csrf_token', CSRF);
+    body.set('target_host', selectEl.value);
+    fetch(activeUrl, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString()
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          setStatus(d.message || 'Live migration started.', 'success');
+          showForm(false);
+        } else {
+          setStatus(d.error || 'Live migration failed.', 'error');
+          confirmBtn.disabled = false;
+        }
+      })
+      .catch(function () {
+        setStatus('Live migration request failed.', 'error');
+        confirmBtn.disabled = false;
+      });
+  });
+
+  modal.querySelectorAll('[data-migrate-dismiss]').forEach(function (el) {
+    el.addEventListener('click', closeModal);
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeModal();
+  });
+})();
+</script>
+{% endif %}
 {% if result and result.charts %}
 <script>
 (function(){
