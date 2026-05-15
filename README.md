@@ -71,10 +71,11 @@ pip install -e .
 ```
 
 `pip install -e .` puts the `opsbi` console command on your PATH and pulls
-in the runtime dependencies (Flask, Flask-WTF, PyMySQL, keystoneauth1,
-requests, openpyxl, matplotlib, waitress). If you'd rather not install the
-package itself, `pip install -r requirements.txt` installs the same set —
-then invoke the CLI as `python -m openstack_bi.cli` instead of `opsbi`.
+in the runtime dependencies (Flask, Flask-WTF, Werkzeug, PyMySQL,
+keystoneauth1, requests, openpyxl, matplotlib, waitress). If you'd rather
+not install the package itself, `pip install -r requirements.txt` installs
+the same set — then invoke the CLI as `python -m openstack_bi.cli` instead
+of `opsbi`.
 
 Either way, the next step is to initialize the configuration store and run
 the setup wizard — see [Configuration](#configuration). For a
@@ -223,9 +224,9 @@ about an hour, after which the action prompts for a fresh sign-in.
 When signed in via **Keystone**, the **SPLA-licensed instances** report
 gains an **Actions** column with two per-row operations:
 
-- **Live migrate** — opens a target-host picker (the `nova-compute`
-  hosts in that instance's region, fetched live from Nova) and starts a
-  live migration to the chosen host.
+- **Live migrate** — opens an in-page dialog to pick a target host (the
+  `nova-compute` hosts in that instance's region, fetched live from
+  Nova) and starts a live migration — without leaving the report.
 - **Console** — opens the instance's noVNC console in a new browser tab.
 
 Both call the Nova API in the instance's region as the logged-in user,
@@ -384,6 +385,7 @@ openstack_bi/
   config_db.py      SQLite configuration store + migration runner
   db.py             connect/query against one (region, database)
   openstack.py      shared Keystone + Nova cell queries
+  nova.py           Nova compute REST API client (live migration, console)
   util.py           humanize, annotate_ages
   cli.py            `opsbi` entry: report subparsers + admin/config/roles
   auth/
@@ -391,6 +393,7 @@ openstack_bi/
     keystone.py     Keystone v3 password auth + role/project resolution
     local.py        local administrator accounts (hashed passwords)
     session.py      Flask session helpers + capability decorators
+    token_store.py  in-memory scoped Keystone token cache
   reports/
     __init__.py     registry — add new report modules here
     base.py         Report ABC + Param/ReportResult/ChartSpec
@@ -401,6 +404,7 @@ openstack_bi/
     auth_routes.py  login / logout
     setup_routes.py first-run setup wizard
     admin_routes.py admin pages (regions, schemas, keystone, users, roles, audit)
+    instance_routes.py  live-migrate / console Nova actions
     forms.py        request.args → report kwargs + form-values echo
     excel.py        generic .xlsx with matplotlib chart embedding
 migrations/         NNNN_*.sql config-DB schema migrations
