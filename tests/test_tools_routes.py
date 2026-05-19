@@ -132,6 +132,126 @@ def test_move_unknown_region_is_rejected(client, monkeypatch):
     assert called == []
 
 
+def test_move_redirects_to_target_with_verify_flag(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    monkeypatch.setattr(neutron, "move_router", lambda *a, **k: None)
+
+    r = client.post("/tools/routers/move", data={
+        "region": "dtw", "source_agent": "src", "target_agent": "dst",
+        "router_ids": ["r1"],
+    })
+    assert r.status_code == 302
+    loc = r.headers["Location"]
+    assert "agent=dst" in loc and "verify=1" in loc
+
+
+def test_move_all_failed_redirects_to_source_without_verify(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+
+    def _fail(*a, **k):
+        raise neutron.NeutronError("nope")
+
+    monkeypatch.setattr(neutron, "move_router", _fail)
+
+    r = client.post("/tools/routers/move", data={
+        "region": "dtw", "source_agent": "src", "target_agent": "dst",
+        "router_ids": ["r1"],
+    })
+    assert r.status_code == 302
+    loc = r.headers["Location"]
+    assert "agent=src" in loc and "verify=1" not in loc
+
+
+# --- Router reachability verification ---------------------------------------
+
+def test_verify_requires_login(client):
+    r = client.post("/tools/routers/verify", data={})
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_verify_pings_resolved_ips(client, monkeypatch):
+    # No Keystone token needed — verification is server-side and read-only.
+    _login_keystone(client, with_token=False)
+    from openstack_bi import netcheck, neutron
+
+    monkeypatch.setattr(neutron, "router_wan_ips", lambda region, ids: {
+        "r1": {"id": "r1", "name": "edge-1", "wan_ips": ["203.0.113.5"],
+               "gateway_ip": "203.0.113.5"},
+    })
+    monkeypatch.setattr(netcheck, "ping_hosts", lambda ips, **kw: {
+        "results": {"203.0.113.5": {"ip": "203.0.113.5", "reachable": True,
+                                    "latency_ms": 9.9, "note": "", "error": None}},
+        "summary": {"total": 1, "reachable": 1, "unreachable": 0, "unknown": 0},
+        "ping_available": True, "error": None,
+    })
+    r = client.post("/tools/routers/verify", data={
+        "region": "dtw", "router_ids": ["r1"],
+    })
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ok"] is True
+    assert d["results"][0]["reachable"] is True
+    assert d["results"][0]["latency_ms"] == 9.9
+    assert d["summary"]["reachable"] == 1
+
+
+def test_verify_router_without_wan_ip(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import netcheck, neutron
+
+    monkeypatch.setattr(neutron, "router_wan_ips", lambda region, ids: {
+        "r1": {"id": "r1", "name": "internal", "wan_ips": [], "gateway_ip": ""},
+    })
+    monkeypatch.setattr(netcheck, "ping_hosts", lambda ips, **kw: {
+        "results": {}, "summary": {"total": 0, "reachable": 0,
+        "unreachable": 0, "unknown": 0}, "ping_available": True, "error": None,
+    })
+    r = client.post("/tools/routers/verify", data={
+        "region": "dtw", "router_ids": ["r1"],
+    })
+    d = r.get_json()
+    assert d["results"][0]["reachable"] is None
+    assert d["results"][0]["note"] == "no gateway port"
+
+
+def test_verify_handles_ping_unavailable(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import netcheck, neutron
+
+    monkeypatch.setattr(neutron, "router_wan_ips", lambda region, ids: {
+        "r1": {"id": "r1", "name": "edge-1", "wan_ips": ["203.0.113.5"],
+               "gateway_ip": "203.0.113.5"},
+    })
+    monkeypatch.setattr(netcheck, "ping_hosts", lambda ips, **kw: {
+        "results": {}, "summary": {"total": 1, "reachable": 0,
+        "unreachable": 0, "unknown": 1}, "ping_available": False,
+        "error": "ping is not permitted on the server",
+    })
+    r = client.post("/tools/routers/verify", data={
+        "region": "dtw", "router_ids": ["r1"],
+    })
+    d = r.get_json()
+    assert d["ok"] is True            # request succeeded; verification unavailable
+    assert d["warning"]
+    assert d["results"][0]["reachable"] is None   # never a false "down"
+
+
+def test_verify_rejects_empty_router_ids(client):
+    _login_keystone(client)
+    r = client.post("/tools/routers/verify", data={"region": "dtw"})
+    assert r.status_code == 400
+    assert r.get_json()["ok"] is False
+
+
 # --- VLAN tool --------------------------------------------------------------
 
 def test_vlans_page_requires_login(client):

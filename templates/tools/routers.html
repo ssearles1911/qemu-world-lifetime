@@ -123,6 +123,10 @@
               {% if not has_token %}disabled title="Sign in with Keystone to move routers"{% endif %}>
         Move selected routers
       </button>
+      <button type="button" id="verify-btn" class="btn btn-outline"
+              title="Ping the WAN IP of the selected routers (or all, if none selected)">
+        Verify reachability
+      </button>
     </div>
 
     <div class="overflow-x-auto">
@@ -177,6 +181,28 @@
     </p>
   {% endif %}
 </div></div>
+
+{# --- Reachability verification results (filled by JS) --- #}
+<div id="verify-panel" class="card mt-6 hidden"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Reachability verification
+  </h2>
+  <div id="verify-status" class="text-sm text-gray-600 mb-3"></div>
+  <div class="overflow-x-auto">
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="text-left text-gray-500 border-b">
+        <th class="py-1 pr-4">Router</th>
+        <th class="py-1 pr-4">WAN IP</th>
+        <th class="py-1 pr-4">Reachable</th>
+        <th class="py-1 pr-4 text-right">Latency</th>
+        <th class="py-1 pr-4">Note</th>
+      </tr>
+    </thead>
+    <tbody id="verify-results"></tbody>
+  </table>
+  </div>
+</div></div>
 {% endif %}
 {% endif %}
 {% endblock %}
@@ -191,6 +217,112 @@
       c.checked = all.checked;
     });
   });
+})();
+
+(function () {
+  // Reachability verification: ping the selected routers' WAN IPs via
+  // the /tools/routers/verify JSON endpoint and render the results.
+  var btn = document.getElementById('verify-btn');
+  var panel = document.getElementById('verify-panel');
+  var tbody = document.getElementById('verify-results');
+  var statusEl = document.getElementById('verify-status');
+  if (!btn || !panel || !tbody || !statusEl) return;
+
+  var CSRF = {{ csrf_token()|tojson }};
+  var VERIFY_URL = {{ url_for('tools_routers_verify')|tojson }};
+  var REGION = {{ (region.name if region else '')|tojson }};
+
+  function ids(selector) {
+    return Array.prototype.map.call(
+      document.querySelectorAll(selector),
+      function (c) { return c.value; }
+    );
+  }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+  function badge(reachable) {
+    if (reachable === true) {
+      return '<span class="text-green-700 font-medium">✓ reachable</span>';
+    }
+    if (reachable === false) {
+      return '<span class="text-red-700 font-medium">✗ unreachable</span>';
+    }
+    return '<span class="text-gray-500">— unknown</span>';
+  }
+  function render(d) {
+    tbody.innerHTML = '';
+    d.results.forEach(function (r) {
+      var tr = document.createElement('tr');
+      tr.className = 'border-b';
+      var latency = (r.latency_ms != null) ? (r.latency_ms + ' ms') : '—';
+      tr.innerHTML =
+        '<td class="py-1 pr-4">' + escapeHtml(r.name) + '</td>' +
+        '<td class="py-1 pr-4 font-mono">' + escapeHtml(r.wan_ip || '—') + '</td>' +
+        '<td class="py-1 pr-4">' + badge(r.reachable) + '</td>' +
+        '<td class="py-1 pr-4 text-right tabular-nums">' + escapeHtml(latency) + '</td>' +
+        '<td class="py-1 pr-4 text-gray-500">' + escapeHtml(r.note) + '</td>';
+      tbody.appendChild(tr);
+    });
+    var s = d.summary;
+    var msg = s.reachable + ' / ' + s.total + ' reachable';
+    if (s.unreachable) { msg += ' · ' + s.unreachable + ' unreachable'; }
+    if (s.unknown) { msg += ' · ' + s.unknown + ' unknown'; }
+    if (d.warning) {
+      statusEl.innerHTML = '<span class="text-amber-700 font-medium">' +
+        escapeHtml(d.warning) + '</span> — ' + escapeHtml(msg);
+    } else {
+      statusEl.textContent = msg;
+    }
+  }
+  function runVerify(routerIds) {
+    panel.classList.remove('hidden');
+    tbody.innerHTML = '';
+    if (!routerIds.length) {
+      statusEl.textContent = 'No routers to verify.';
+      return;
+    }
+    statusEl.textContent = 'Pinging ' + routerIds.length + ' router(s)…';
+    btn.disabled = true;
+    var body = new URLSearchParams();
+    body.set('csrf_token', CSRF);
+    body.set('region', REGION);
+    routerIds.forEach(function (id) { body.append('router_ids', id); });
+    fetch(VERIFY_URL, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString()
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) { render(d); }
+        else { statusEl.textContent = d.error || 'Verification failed.'; }
+      })
+      .catch(function () {
+        statusEl.textContent = 'Verification request failed.';
+      })
+      .then(function () { btn.disabled = false; });
+  }
+
+  btn.addEventListener('click', function () {
+    var checked = ids('.router-check:checked');
+    runVerify(checked.length ? checked : ids('.router-check'));
+  });
+
+  // Auto-run right after a move (the move redirect adds ?verify=1).
+  if (new URLSearchParams(window.location.search).get('verify') === '1') {
+    runVerify(ids('.router-check'));
+    if (window.history && window.history.replaceState) {
+      var u = new URL(window.location.href);
+      u.searchParams.delete('verify');
+      window.history.replaceState({}, '', u);
+    }
+  }
 })();
 </script>
 {% endblock %}

@@ -23,6 +23,11 @@ services:
     # network. If those services live on private networks unreachable
     # from the default bridge, switch to host networking or an external
     # docker network — see BOOTSTRAP.md.
+    #
+    # The L3-router reachability check pings router WAN IPs, which needs
+    # the NET_RAW capability. It is in Docker's default capability set,
+    # so nothing is required here — but if you add `cap_drop: [ALL]`,
+    # you must then also `cap_add: [NET_RAW]`.
     healthcheck:
       # Use the in-image Python rather than requiring curl/wget so the
       # base image stays small.

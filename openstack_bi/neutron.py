@@ -127,6 +127,52 @@ def routers_on_l3_agent(region: Region, agent_id: str) -> List[Dict[str, Any]]:
     return routers
 
 
+def router_wan_ips(
+    region: Region, router_ids: List[str]
+) -> Dict[str, Dict[str, Any]]:
+    """Resolve routers (by id) to their gateway-port WAN IP(s).
+
+    Unlike `routers_on_l3_agent`, this looks routers up by id regardless
+    of which L3 agent currently hosts them — so it stays correct for a
+    router that was just moved, and a move (which only rewrites
+    `routerl3agentbindings`) cannot make a replica's answer wrong.
+
+    Returns `{router_id: {id, name, wan_ips: [...], gateway_ip: str}}`;
+    a router with no gateway port has `wan_ips == []`. An empty
+    `router_ids` short-circuits without a query.
+    """
+    ids = [rid for rid in dict.fromkeys(router_ids) if rid]
+    if not ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(ids))
+    rows = query(
+        region, neutron_db(),
+        f"""
+        SELECT
+            r.id,
+            r.name,
+            (SELECT GROUP_CONCAT(ia.ip_address ORDER BY ia.ip_address
+                                 SEPARATOR ', ')
+             FROM ipallocations ia
+             WHERE ia.port_id = r.gw_port_id) AS gateway_ips
+        FROM routers r
+        WHERE r.id IN ({placeholders})
+        """,
+        ids,
+    )
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        joined = r.get("gateway_ips") or ""
+        wan_ips = [ip.strip() for ip in joined.split(",") if ip.strip()]
+        out[r["id"]] = {
+            "id": r["id"],
+            "name": r.get("name") or "(unnamed)",
+            "wan_ips": wan_ips,
+            "gateway_ip": joined,
+        }
+    return out
+
+
 def list_vlan_physnets(region: Region) -> List[str]:
     """Physical-network labels that can carry VLAN networks, discovered
     from the ML2 VLAN allocation table."""
