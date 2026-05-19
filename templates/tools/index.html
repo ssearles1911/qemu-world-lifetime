@@ -19,5 +19,15 @@
       </p>
     </div>
   </a>
+  <a href="{{ url_for('tools_vlans') }}"
+     class="card hover:shadow-md transition-shadow block">
+    <div class="card-body">
+      <h3 class="font-semibold text-lg mb-1">VLANs</h3>
+      <p class="text-sm text-gray-600">
+        Create a provider VLAN network for a project. The admin creates
+        the network; the project's own users add the subnet.
+      </p>
+    </div>
+  </a>
 </div>
 {% endblock %}

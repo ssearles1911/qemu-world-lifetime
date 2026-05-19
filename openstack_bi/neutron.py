@@ -17,7 +17,7 @@ DB queries live here alongside the actions.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from keystoneauth1 import exceptions as ksa_exc
 from keystoneauth1.session import Session
@@ -114,6 +114,77 @@ def routers_on_l3_agent(region: Region, agent_id: str) -> List[Dict[str, Any]]:
             "distributed": bool(r.get("distributed")),
         })
     return routers
+
+
+def list_vlan_physnets(region: Region) -> List[str]:
+    """Physical-network labels that can carry VLAN networks, discovered
+    from the ML2 VLAN allocation table."""
+    rows = query(
+        region, neutron_db(),
+        "SELECT DISTINCT physical_network FROM ml2_vlan_allocations "
+        "WHERE physical_network IS NOT NULL AND physical_network <> '' "
+        "ORDER BY physical_network",
+    )
+    return [r["physical_network"] for r in rows if r.get("physical_network")]
+
+
+def vlan_networks_for_project(
+    region: Region, project_id: str
+) -> List[Dict[str, Any]]:
+    """VLAN networks owned by `project_id` in `region` — context shown
+    next to the create form so the admin can see what already exists."""
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT n.id, n.name, n.status, n.admin_state_up,
+               ns.physical_network, ns.segmentation_id
+        FROM networksegments ns
+        JOIN networks n ON n.id = ns.network_id
+        WHERE ns.network_type = 'vlan'
+          AND n.project_id = %s
+        ORDER BY ns.segmentation_id
+        """,
+        (project_id,),
+    )
+    networks: List[Dict[str, Any]] = []
+    for r in rows:
+        networks.append({
+            "id": r["id"],
+            "name": r.get("name") or "(unnamed)",
+            "status": r.get("status") or "",
+            "admin_state_up": bool(r.get("admin_state_up")),
+            "physical_network": r.get("physical_network") or "",
+            "segmentation_id": r.get("segmentation_id"),
+        })
+    return networks
+
+
+def vlan_segment_conflict(
+    region: Region, physical_network: str, segmentation_id: int
+) -> Optional[Dict[str, str]]:
+    """Return the network already bound to this `(physnet, VLAN)` segment,
+    or None when the VLAN is free.
+
+    Best-effort pre-check only: it runs against a possibly-lagging
+    replica, so Neutron remains the authority — the create call will
+    still reject a genuine collision.
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT n.id, n.name
+        FROM networksegments ns
+        JOIN networks n ON n.id = ns.network_id
+        WHERE ns.network_type = 'vlan'
+          AND ns.physical_network = %s
+          AND ns.segmentation_id = %s
+        LIMIT 1
+        """,
+        (physical_network, segmentation_id),
+    )
+    if not rows:
+        return None
+    return {"id": rows[0]["id"], "name": rows[0].get("name") or "(unnamed)"}
 
 
 # --- API actions (Keystone-token; state-changing) ---------------------------
@@ -229,3 +300,36 @@ def move_router(
             f"target ({exc}). The router is currently unscheduled — "
             f"reschedule it manually."
         )
+
+
+def create_vlan_network(
+    session: Session,
+    region: str,
+    name: str,
+    project_id: str,
+    physical_network: str,
+    segmentation_id: int,
+) -> Dict[str, Any]:
+    """Create a provider VLAN network owned by `project_id`.
+
+    The `provider:*` attributes require an admin token — which the
+    logged-in Keystone user holds. No subnet is created; the owning
+    project's own users add that afterwards.
+    """
+    resp = _request(
+        session, region, "POST", "/v2.0/networks",
+        json={"network": {
+            "name": name,
+            "project_id": project_id,
+            "admin_state_up": True,
+            "provider:network_type": "vlan",
+            "provider:physical_network": physical_network,
+            "provider:segmentation_id": int(segmentation_id),
+        }},
+    )
+    net = (resp.json() or {}).get("network", {}) or {}
+    return {
+        "id": net.get("id") or "",
+        "name": net.get("name") or name,
+        "project_id": net.get("project_id") or project_id,
+    }

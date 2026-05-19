@@ -45,6 +45,7 @@ the same model as the per-instance Nova actions.
 | Tool | Purpose |
 | --- | --- |
 | L3 routers | Reschedule Neutron virtual routers between L3 agents. Pick a region, open the agent you're draining, select its routers, and move them to a healthy target agent — used to clear a network node before maintenance. Each router is removed from the source agent, then added to the target (safe for legacy, HA, and DVR routers). |
+| VLANs | Create a provider VLAN network owned by a target project. The admin picks the project, network name, physnet, and VLAN ID; the network is created `vlan`-typed and project-owned. No subnet is created — the project's own users add that. A pre-submit check flags a VLAN already in use on that physnet. |
 
 Every move is written to the configuration audit log (`l3_router_move`
 or `l3_router_move_failed`).

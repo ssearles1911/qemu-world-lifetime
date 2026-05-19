@@ -8,6 +8,7 @@
       {% set links = [
         ('tools_index',   'Overview'),
         ('tools_routers', 'L3 routers'),
+        ('tools_vlans',   'VLANs'),
       ] %}
       {% for endpoint, label in links %}
         <a href="{{ url_for(endpoint) }}"

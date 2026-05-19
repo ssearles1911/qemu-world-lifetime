@@ -130,3 +130,95 @@ def test_move_unknown_region_is_rejected(client, monkeypatch):
     })
     assert r.status_code == 302
     assert called == []
+
+
+# --- VLAN tool --------------------------------------------------------------
+
+def test_vlans_page_requires_login(client):
+    r = client.get("/tools/vlans")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_vlans_page_renders(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    monkeypatch.setattr(neutron, "list_vlan_physnets", lambda region: ["vlan"])
+    r = client.get("/tools/vlans")
+    assert r.status_code == 200
+    assert b"VLAN" in r.data
+    assert b"project-search" in r.data  # searchable project picker
+
+
+def _vlan_form(**overrides):
+    data = {
+        "region": "dtw", "project_id": "proj-9", "name": "acme-vlan",
+        "physical_network": "vlan", "segmentation_id": "815",
+    }
+    data.update(overrides)
+    return data
+
+
+def test_vlans_create_requires_keystone_token(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    called = []
+    monkeypatch.setattr(neutron, "vlan_segment_conflict", lambda *a, **k: None)
+    monkeypatch.setattr(neutron, "create_vlan_network", lambda *a, **k: called.append(a))
+
+    r = client.post("/tools/vlans/create", data=_vlan_form())
+    assert r.status_code == 302
+    assert called == []
+
+
+def test_vlans_create_rejects_bad_vlan_id(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    called = []
+    monkeypatch.setattr(neutron, "create_vlan_network", lambda *a, **k: called.append(a))
+
+    r = client.post("/tools/vlans/create", data=_vlan_form(segmentation_id="9999"))
+    assert r.status_code == 302
+    assert called == []  # out-of-range VLAN rejected before any API call
+
+
+def test_vlans_create_blocked_by_segment_conflict(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    monkeypatch.setattr(
+        neutron, "vlan_segment_conflict",
+        lambda *a, **k: {"id": "net-7", "name": "other-net"},
+    )
+    called = []
+    monkeypatch.setattr(neutron, "create_vlan_network", lambda *a, **k: called.append(a))
+
+    r = client.post("/tools/vlans/create", data=_vlan_form())
+    assert r.status_code == 302
+    assert called == []  # a conflicting segment blocks the create
+
+
+def test_vlans_create_calls_neutron(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    monkeypatch.setattr(neutron, "vlan_segment_conflict", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(
+        neutron, "create_vlan_network",
+        lambda sess, region, name, project_id, physnet, vlan: calls.append(
+            (region, name, project_id, physnet, vlan)
+        ) or {"id": "net-1", "name": name, "project_id": project_id},
+    )
+
+    r = client.post("/tools/vlans/create", data=_vlan_form())
+    assert r.status_code == 302
+    assert calls == [("dtw", "acme-vlan", "proj-9", "vlan", 815)]

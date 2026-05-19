@@ -1,0 +1,185 @@
+{% extends "tools/_layout.html" %}
+{% block tools_body %}
+<h1 class="text-2xl font-semibold mb-2">VLANs</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Create a provider VLAN network owned by a target project. The admin
+  creates the network here; no subnet is created — the project's own
+  users add that afterwards.
+</p>
+
+{% if error %}
+  <div class="px-4 py-2 rounded text-sm bg-red-100 text-red-800 border border-red-200 mb-4">
+    {{ error }}
+  </div>
+{% endif %}
+
+{% if regions %}
+{# --- Region + project selectors --- #}
+<form method="get" class="mb-6 flex flex-wrap items-end gap-3">
+  <label class="block">
+    <span class="text-sm font-medium">Region</span>
+    <select name="region" class="form-input mt-1" onchange="this.form.submit()">
+      {% for r in regions %}
+        <option value="{{ r.name }}"
+                {% if region and r.name == region.name %}selected{% endif %}>
+          {{ r.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="block">
+    <span class="text-sm font-medium">Target project</span>
+    <input type="search" id="project-search" autocomplete="off"
+           class="form-input mt-1 w-full"
+           placeholder="Type to search projects…">
+    <select name="project" id="project-select" class="form-input mt-1 w-full"
+            onchange="this.form.submit()">
+      <option value="">— choose a project —</option>
+      {% for p in projects %}
+        <option value="{{ p.id }}"
+                {% if selected_project and p.id == selected_project.id %}selected{% endif %}>
+          {{ p.label }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit" class="btn btn-primary">Load</button></noscript>
+</form>
+
+{% if not projects %}
+  <div class="px-4 py-2 rounded text-sm bg-amber-50 text-amber-800 border border-amber-200 mb-4">
+    No projects could be read from Keystone — check the Keystone region
+    configuration under Admin.
+  </div>
+{% endif %}
+
+{% if not has_token %}
+  <div class="px-4 py-2 rounded text-sm bg-amber-50 text-amber-800 border border-amber-200 mb-4">
+    You can browse, but creating a network needs a Keystone-scoped admin
+    session. Sign out and sign back in with Keystone to create VLANs.
+  </div>
+{% endif %}
+
+{% if selected_project %}
+{# --- Existing VLAN networks for the project --- #}
+<div class="card mb-6"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    VLAN networks already owned by {{ selected_project.name }} in {{ region.name }}
+  </h2>
+  {% if project_networks %}
+  <div class="overflow-x-auto">
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="text-left text-gray-500 border-b">
+        <th class="py-1 pr-4 text-right">VLAN</th>
+        <th class="py-1 pr-4">Network</th>
+        <th class="py-1 pr-4">Physnet</th>
+        <th class="py-1 pr-4">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for n in project_networks %}
+        <tr class="border-b">
+          <td class="py-1 pr-4 text-right tabular-nums">{{ n.segmentation_id }}</td>
+          <td class="py-1 pr-4">
+            {{ n.name }}
+            <div class="text-xs text-gray-400 font-mono">{{ n.id }}</div>
+          </td>
+          <td class="py-1 pr-4 font-mono">{{ n.physical_network }}</td>
+          <td class="py-1 pr-4">
+            {{ n.status or '—' }}
+            {% if not n.admin_state_up %}
+              <span class="text-red-700">(admin down)</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    <p class="text-sm text-gray-500">
+      This project has no VLAN networks in {{ region.name }} yet.
+    </p>
+  {% endif %}
+</div></div>
+
+{# --- Create form --- #}
+<div class="card"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Add a VLAN network for {{ selected_project.name }}
+  </h2>
+  <form method="post" action="{{ url_for('tools_vlans_create') }}"
+        class="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="region" value="{{ region.name }}">
+    <input type="hidden" name="project_id" value="{{ selected_project.id }}">
+
+    <label class="block md:col-span-2">
+      <span class="text-sm font-medium">Network name</span>
+      <input type="text" name="name" required class="form-input mt-1 w-full"
+             placeholder="e.g. {{ selected_project.name }}-vlan">
+    </label>
+    <label class="block">
+      <span class="text-sm font-medium">Physical network</span>
+      {% if physnets %}
+        <select name="physical_network" required class="form-input mt-1 w-full">
+          {% for p in physnets %}
+            <option value="{{ p }}">{{ p }}</option>
+          {% endfor %}
+        </select>
+      {% else %}
+        <input type="text" name="physical_network" required
+               class="form-input mt-1 w-full" placeholder="physnet label">
+      {% endif %}
+    </label>
+    <label class="block">
+      <span class="text-sm font-medium">VLAN ID</span>
+      <input type="number" name="segmentation_id" required min="1" max="4094"
+             class="form-input mt-1 w-full" placeholder="1–4094">
+    </label>
+    <div class="md:col-span-2">
+      <button type="submit" class="btn btn-primary"
+              {% if not has_token %}disabled title="Sign in with Keystone to create VLANs"{% endif %}>
+        Create VLAN network
+      </button>
+      <p class="text-xs text-gray-500 mt-2">
+        Creates a <span class="font-mono">vlan</span>-type provider network
+        owned by {{ selected_project.name }}. No subnet is created.
+      </p>
+    </div>
+  </form>
+</div></div>
+{% else %}
+  <p class="text-sm text-gray-500">
+    Select a target project to add a VLAN network.
+  </p>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  // Type-to-search over the target-project dropdown: filter the <option>
+  // list as the admin types, so a long project list stays usable.
+  var search = document.getElementById('project-search');
+  var select = document.getElementById('project-select');
+  if (!search || !select) return;
+
+  search.addEventListener('input', function () {
+    var q = (search.value || '').trim().toLowerCase();
+    Array.prototype.forEach.call(select.options, function (opt) {
+      if (!opt.value) return;  // always keep the "— choose —" placeholder
+      opt.hidden = q !== '' && opt.text.toLowerCase().indexOf(q) === -1;
+    });
+  });
+
+  // Enter in the search box would submit the GET form; suppress it so the
+  // admin can keep typing and then pick from the dropdown.
+  search.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') e.preventDefault();
+  });
+})();
+</script>
+{% endblock %}

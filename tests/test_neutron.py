@@ -133,3 +133,63 @@ def test_routers_on_l3_agent_normalizes_flags(monkeypatch):
     assert routers["r2"]["distributed"] is True
     assert routers["r2"]["name"] == "(unnamed)"
     assert routers["r2"]["admin_state_up"] is False
+
+
+# --- VLAN networks ----------------------------------------------------------
+
+def test_create_vlan_network_posts_provider_attributes():
+    sess = MagicMock()
+    sess.request.return_value = _resp(201, {"network": {"id": "net-1", "name": "acme-vlan"}})
+
+    out = neutron.create_vlan_network(
+        sess, "dtw", "acme-vlan", "proj-9", "vlan", 815
+    )
+
+    path, method = sess.request.call_args[0]
+    body = sess.request.call_args[1]["json"]["network"]
+    assert path == "/v2.0/networks"
+    assert method == "POST"
+    assert body["provider:network_type"] == "vlan"
+    assert body["provider:physical_network"] == "vlan"
+    assert body["provider:segmentation_id"] == 815
+    assert body["project_id"] == "proj-9"
+    assert body["name"] == "acme-vlan"
+    assert "subnet" not in str(body)  # the tool never creates a subnet
+    assert out["id"] == "net-1"
+
+
+def test_list_vlan_physnets(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(
+        neutron, "query",
+        lambda *a, **k: [{"physical_network": "vlan"}, {"physical_network": "ext"}],
+    )
+    assert neutron.list_vlan_physnets(_REGION) == ["vlan", "ext"]
+
+
+def test_vlan_segment_conflict_found(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(
+        neutron, "query",
+        lambda *a, **k: [{"id": "net-7", "name": "other-net"}],
+    )
+    hit = neutron.vlan_segment_conflict(_REGION, "vlan", 815)
+    assert hit == {"id": "net-7", "name": "other-net"}
+
+
+def test_vlan_segment_conflict_free(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [])
+    assert neutron.vlan_segment_conflict(_REGION, "vlan", 815) is None
+
+
+def test_vlan_networks_for_project_normalizes(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"id": "n1", "name": None, "status": "ACTIVE", "admin_state_up": 1,
+         "physical_network": "vlan", "segmentation_id": 100},
+    ])
+    nets = neutron.vlan_networks_for_project(_REGION, "proj-9")
+    assert nets[0]["name"] == "(unnamed)"
+    assert nets[0]["admin_state_up"] is True
+    assert nets[0]["segmentation_id"] == 100

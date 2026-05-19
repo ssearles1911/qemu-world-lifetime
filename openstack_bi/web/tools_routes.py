@@ -18,7 +18,7 @@ from flask import (
     Flask, flash, redirect, render_template, request, session, url_for,
 )
 
-from .. import config_db, neutron
+from .. import config_db, neutron, openstack
 from ..auth import token_store
 from ..auth.session import current_user, login_required
 from ..config import Region, keystone_db, keystone_region, parse_regions
@@ -33,6 +33,11 @@ def register(app: Flask) -> None:
     app.add_url_rule(
         "/tools/routers/move", view_func=routers_move,
         endpoint="tools_routers_move", methods=("POST",),
+    )
+    app.add_url_rule("/tools/vlans", view_func=vlans, endpoint="tools_vlans")
+    app.add_url_rule(
+        "/tools/vlans/create", view_func=vlans_create,
+        endpoint="tools_vlans_create", methods=("POST",),
     )
 
 
@@ -209,4 +214,162 @@ def routers_move():
         )
     if not moved and not failed:
         flash("No routers were moved.", "info")
+    return redirect(back)
+
+
+# --- VLAN networks ----------------------------------------------------------
+
+def _project_choices() -> List[Dict[str, str]]:
+    """Non-domain Keystone projects as `{id, name, label}` for the picker.
+
+    Label is `project (domain)` so duplicate names across domains stay
+    distinguishable. Best-effort — returns [] if Keystone is unreachable.
+    """
+    try:
+        projects = openstack.list_all_projects()
+        domains = {d["id"]: d["name"] for d in openstack.list_domains()}
+    except Exception:  # noqa: BLE001
+        return []
+    out: List[Dict[str, str]] = []
+    for p in projects:
+        domain = domains.get(p.get("domain_id"), "")
+        label = f"{p['name']} ({domain})" if domain else p["name"]
+        out.append({"id": p["id"], "name": p["name"], "label": label})
+    out.sort(key=lambda c: c["label"].lower())
+    return out
+
+
+@login_required
+def vlans():
+    """Create a provider VLAN network for a target project.
+
+    `?region=` selects the region; `?project=` selects the target
+    project and reveals that project's existing VLAN networks plus the
+    create form.
+    """
+    regions = _regions()
+    if not regions:
+        flash("No regions are configured.", "error")
+        return render_template(
+            "tools/vlans.html",
+            regions=[], region=None, projects=[], physnets=[],
+            selected_project=None, project_networks=[],
+            has_token=False, error=None,
+        )
+
+    region_name = request.args.get("region") or regions[0].name
+    region = _resolve_region(region_name)
+    if region is None:
+        flash(f"Unknown region {region_name!r}.", "error")
+        region = regions[0]
+
+    error: Optional[str] = None
+    physnets: List[str] = []
+    try:
+        physnets = neutron.list_vlan_physnets(region)
+    except Exception as exc:  # noqa: BLE001
+        error = f"Could not read VLAN physical networks for {region.name}: {exc}"
+
+    projects = _project_choices()
+    selected_project_id = request.args.get("project") or None
+    selected_project = next(
+        (p for p in projects if p["id"] == selected_project_id), None
+    )
+
+    project_networks: List[Dict] = []
+    if selected_project is not None and error is None:
+        try:
+            project_networks = neutron.vlan_networks_for_project(
+                region, selected_project_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = f"Could not list the project's VLAN networks: {exc}"
+
+    return render_template(
+        "tools/vlans.html",
+        regions=regions, region=region, projects=projects, physnets=physnets,
+        selected_project=selected_project, project_networks=project_networks,
+        has_token=_keystone_session() is not None, error=error,
+    )
+
+
+@login_required
+def vlans_create():
+    """Create the provider VLAN network. No subnet is created — the
+    owning project's users add that themselves."""
+    region_name = (request.form.get("region") or "").strip()
+    project_id = (request.form.get("project_id") or "").strip()
+    name = (request.form.get("name") or "").strip()
+    physnet = (request.form.get("physical_network") or "").strip()
+    vlan_raw = (request.form.get("segmentation_id") or "").strip()
+
+    region = _resolve_region(region_name)
+    back = url_for("tools_vlans", region=region_name, project=project_id)
+    if region is None:
+        flash(f"Unknown region {region_name!r}.", "error")
+        return redirect(url_for("tools_vlans"))
+    if not project_id:
+        flash("Choose a target project.", "error")
+        return redirect(back)
+    if not name:
+        flash("Enter a network name.", "error")
+        return redirect(back)
+    if not physnet:
+        flash("Choose a physical network.", "error")
+        return redirect(back)
+    try:
+        vlan_id = int(vlan_raw)
+    except ValueError:
+        flash("VLAN ID must be a whole number between 1 and 4094.", "error")
+        return redirect(back)
+    if not 1 <= vlan_id <= 4094:
+        flash("VLAN ID must be between 1 and 4094.", "error")
+        return redirect(back)
+
+    ks = _keystone_session()
+    if ks is None:
+        flash(
+            "Sign in with Keystone to create networks — a scoped admin "
+            "token is required to call the network API.",
+            "error",
+        )
+        return redirect(back)
+
+    # Best-effort pre-check against the (replica) DB. Neutron rejects a
+    # genuine collision regardless; this just gives a friendlier message.
+    try:
+        conflict = neutron.vlan_segment_conflict(region, physnet, vlan_id)
+    except Exception:  # noqa: BLE001
+        conflict = None
+    if conflict is not None:
+        flash(
+            f"VLAN {vlan_id} on physnet {physnet!r} is already used by "
+            f"network '{conflict['name']}' ({conflict['id']}).",
+            "error",
+        )
+        return redirect(back)
+
+    try:
+        net = neutron.create_vlan_network(
+            ks, region.name, name, project_id, physnet, vlan_id
+        )
+    except neutron.NeutronError as exc:
+        _audit(
+            "vlan_network_create_failed",
+            f"{name!r} vlan={vlan_id} physnet={physnet} "
+            f"project={project_id} ({region.name}): {exc}",
+        )
+        flash(f"Could not create the network: {exc}", "error")
+        return redirect(back)
+
+    _audit(
+        "vlan_network_create",
+        f"{net['id']} {name!r} vlan={vlan_id} physnet={physnet} "
+        f"project={project_id} ({region.name})",
+    )
+    flash(
+        f"Created VLAN network {name!r} ({net['id']}) on VLAN {vlan_id}. "
+        "The project's users can now create a subnet on it.",
+        "success",
+    )
     return redirect(back)
