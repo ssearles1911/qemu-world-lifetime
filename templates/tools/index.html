@@ -1,0 +1,33 @@
+{% extends "tools/_layout.html" %}
+{% block tools_body %}
+<h1 class="text-2xl font-semibold mb-2">Admin tools</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Operational tasks run against the live OpenStack services as the
+  signed-in Keystone user. Listings are read straight from the regional
+  database — fast and cheap; state-changing actions call the service API
+  and need a Keystone-scoped session.
+</p>
+
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
+  <a href="{{ url_for('tools_routers') }}"
+     class="card hover:shadow-md transition-shadow block">
+    <div class="card-body">
+      <h3 class="font-semibold text-lg mb-1">L3 routers</h3>
+      <p class="text-sm text-gray-600">
+        Reschedule Neutron virtual routers between L3 agents — drain a
+        network node before taking it out of service for maintenance.
+      </p>
+    </div>
+  </a>
+  <a href="{{ url_for('tools_vlans') }}"
+     class="card hover:shadow-md transition-shadow block">
+    <div class="card-body">
+      <h3 class="font-semibold text-lg mb-1">VLANs</h3>
+      <p class="text-sm text-gray-600">
+        Create a provider VLAN network for a project. The admin creates
+        the network; the project's own users add the subnet.
+      </p>
+    </div>
+  </a>
+</div>
+{% endblock %}

@@ -24,6 +24,7 @@ from . import issues  # noqa: F401
 from . import project_growth  # noqa: F401
 from . import qemu_lifetime  # noqa: F401
 from . import snapshot_leaderboard  # noqa: F401
+from . import spla_hosts  # noqa: F401
 from . import spla_instances  # noqa: F401
 from . import stale_snapshots  # noqa: F401
 from . import volume_history  # noqa: F401
@@ -44,6 +45,7 @@ _ORDER = [
     volume_history,
     volume_resizes,
     spla_instances,
+    spla_hosts,
 ]
 
 

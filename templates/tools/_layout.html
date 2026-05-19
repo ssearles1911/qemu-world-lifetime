@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Tools — OpenStack Ops BI{% endblock %}
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-[14rem_1fr] gap-6">
+  <aside class="md:border-r md:pr-4">
+    <h2 class="text-xs uppercase tracking-wide text-gray-500 mb-2">Admin tools</h2>
+    <nav class="flex flex-col gap-1 text-sm">
+      {% set links = [
+        ('tools_index',   'Overview'),
+        ('tools_routers', 'L3 routers'),
+        ('tools_vlans',   'VLANs'),
+      ] %}
+      {% for endpoint, label in links %}
+        <a href="{{ url_for(endpoint) }}"
+           class="px-2 py-1 rounded {% if request.endpoint == endpoint %}bg-primary text-white{% else %}hover:bg-gray-100 text-gray-700{% endif %}">
+          {{ label }}
+        </a>
+      {% endfor %}
+    </nav>
+  </aside>
+  <section>
+    {% block tools_body %}{% endblock %}
+  </section>
+</div>
+{% endblock %}

@@ -71,6 +71,10 @@
                 {% endfor %}
               </div>
             </div>
+            <a href="{{ url_for('tools_index') }}"
+               class="nav-link px-3 py-2 rounded-md hover:bg-primary/80 text-sm{% if request.endpoint and request.endpoint.startswith('tools_') %} active{% endif %}">
+              Tools
+            </a>
           </div>
           {% endif %}
         </div>
