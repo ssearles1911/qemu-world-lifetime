@@ -121,9 +121,10 @@ def test_routers_on_l3_agent_normalizes_flags(monkeypatch):
     monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
     rows = [
         {"id": "r1", "name": "ha-rtr", "status": "ACTIVE", "admin_state_up": 1,
-         "project_id": "p1", "ha": 1, "distributed": 0},
+         "project_id": "p1", "ha": 1, "distributed": 0,
+         "gateway_ips": "203.0.113.5"},
         {"id": "r2", "name": None, "status": "ACTIVE", "admin_state_up": 0,
-         "project_id": "p2", "ha": 0, "distributed": 1},
+         "project_id": "p2", "ha": 0, "distributed": 1, "gateway_ips": None},
     ]
     monkeypatch.setattr(neutron, "query", lambda *a, **k: rows)
 
@@ -133,6 +134,8 @@ def test_routers_on_l3_agent_normalizes_flags(monkeypatch):
     assert routers["r2"]["distributed"] is True
     assert routers["r2"]["name"] == "(unnamed)"
     assert routers["r2"]["admin_state_up"] is False
+    assert routers["r1"]["gateway_ip"] == "203.0.113.5"   # gateway port IP
+    assert routers["r2"]["gateway_ip"] == ""              # no gateway port
 
 
 # --- VLAN networks ----------------------------------------------------------

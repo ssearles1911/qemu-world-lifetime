@@ -132,6 +132,7 @@
           <th class="py-1 pr-3"><input type="checkbox" id="check-all" class="form-checkbox"></th>
           <th class="py-1 pr-4">Router</th>
           <th class="py-1 pr-4">Project</th>
+          <th class="py-1 pr-4">WAN IP</th>
           <th class="py-1 pr-4">Status</th>
           <th class="py-1 pr-4">Type</th>
         </tr>
@@ -148,6 +149,7 @@
               <div class="text-xs text-gray-400 font-mono">{{ r.id }}</div>
             </td>
             <td class="py-1 pr-4">{{ r.project_name or r.project_id or '—' }}</td>
+            <td class="py-1 pr-4 font-mono">{{ r.gateway_ip or '—' }}</td>
             <td class="py-1 pr-4">
               {{ r.status or '—' }}
               {% if not r.admin_state_up %}

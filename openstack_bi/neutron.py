@@ -81,8 +81,14 @@ def list_l3_agents(region: Region) -> List[Dict[str, Any]]:
 
 def routers_on_l3_agent(region: Region, agent_id: str) -> List[Dict[str, Any]]:
     """Routers currently scheduled to one L3 agent, with their HA /
-    distributed (DVR) flags so the operator can see the router type
-    before moving it."""
+    distributed (DVR) flags and the gateway-port IP(s) — the router's
+    external/WAN address — so the operator has context before moving it.
+
+    A router's WAN interface is its gateway port (`routers.gw_port_id`)
+    on the external network; the correlated subquery pulls that port's
+    fixed IP(s) from `ipallocations`. An internal-only router has no
+    gateway port, so `gateway_ips` is NULL there.
+    """
     rows = query(
         region, neutron_db(),
         """
@@ -93,7 +99,11 @@ def routers_on_l3_agent(region: Region, agent_id: str) -> List[Dict[str, Any]]:
             r.admin_state_up,
             r.project_id,
             COALESCE(rea.ha, 0)          AS ha,
-            COALESCE(rea.distributed, 0) AS distributed
+            COALESCE(rea.distributed, 0) AS distributed,
+            (SELECT GROUP_CONCAT(ia.ip_address ORDER BY ia.ip_address
+                                 SEPARATOR ', ')
+             FROM ipallocations ia
+             WHERE ia.port_id = r.gw_port_id) AS gateway_ips
         FROM routerl3agentbindings rb
         JOIN routers r ON r.id = rb.router_id
         LEFT JOIN router_extra_attributes rea ON rea.router_id = r.id
@@ -112,6 +122,7 @@ def routers_on_l3_agent(region: Region, agent_id: str) -> List[Dict[str, Any]]:
             "project_id": r.get("project_id") or "",
             "ha": bool(r.get("ha")),
             "distributed": bool(r.get("distributed")),
+            "gateway_ip": r.get("gateway_ips") or "",
         })
     return routers
 
