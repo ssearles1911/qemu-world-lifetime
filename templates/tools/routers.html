@@ -1,0 +1,194 @@
+{% extends "tools/_layout.html" %}
+{% block tools_body %}
+<h1 class="text-2xl font-semibold mb-2">L3 routers</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Reschedule virtual routers between L3 agents. Pick a region, open the
+  agent you are draining, select its routers, and move them to a healthy
+  target agent. Each router is removed from the source agent, then added
+  to the target.
+</p>
+
+{% if error %}
+  <div class="px-4 py-2 rounded text-sm bg-red-100 text-red-800 border border-red-200 mb-4">
+    {{ error }}
+  </div>
+{% endif %}
+
+{% if regions %}
+{# --- Region selector --- #}
+<form method="get" class="mb-6 flex items-end gap-3">
+  <label class="block">
+    <span class="text-sm font-medium">Region</span>
+    <select name="region" class="form-input mt-1" onchange="this.form.submit()">
+      {% for r in regions %}
+        <option value="{{ r.name }}"
+                {% if region and r.name == region.name %}selected{% endif %}>
+          {{ r.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit" class="btn btn-primary">Load</button></noscript>
+</form>
+
+{% if not has_token %}
+  <div class="px-4 py-2 rounded text-sm bg-amber-50 text-amber-800 border border-amber-200 mb-4">
+    You can browse agents and routers, but moving a router needs a
+    Keystone-scoped session. Sign out and sign back in with Keystone to
+    perform moves.
+  </div>
+{% endif %}
+
+{# --- L3 agents in the region --- #}
+<div class="card mb-6"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    L3 agents in {{ region.name }}
+  </h2>
+  {% if agents %}
+  <div class="overflow-x-auto">
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="text-left text-gray-500 border-b">
+        <th class="py-1 pr-4">Host</th>
+        <th class="py-1 pr-4">State</th>
+        <th class="py-1 pr-4">Admin</th>
+        <th class="py-1 pr-4">AZ</th>
+        <th class="py-1 pr-4 text-right">Routers</th>
+        <th class="py-1 pr-4"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in agents %}
+        <tr class="border-b {% if selected_agent and a.id == selected_agent.id %}bg-accent{% endif %}">
+          <td class="py-1 pr-4 font-mono">{{ a.host }}</td>
+          <td class="py-1 pr-4">
+            {% if a.alive %}
+              <span class="text-green-700 font-medium">up</span>
+            {% else %}
+              <span class="text-red-700 font-medium">down</span>
+            {% endif %}
+            {% if a.heartbeat_age is not none %}
+              <span class="text-gray-400">({{ a.heartbeat_age }}s ago)</span>
+            {% endif %}
+          </td>
+          <td class="py-1 pr-4">
+            {% if a.admin_state_up %}enabled
+            {% else %}<span class="text-red-700">disabled</span>{% endif %}
+          </td>
+          <td class="py-1 pr-4">{{ a.availability_zone or '—' }}</td>
+          <td class="py-1 pr-4 text-right tabular-nums">{{ a.router_count }}</td>
+          <td class="py-1 pr-4">
+            <a class="text-secondary hover:underline"
+               href="{{ url_for('tools_routers', region=region.name, agent=a.id) }}">
+              View routers
+            </a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    <p class="text-sm text-gray-500">No L3 agents found in this region.</p>
+  {% endif %}
+</div></div>
+
+{# --- Selected agent: routers + move form --- #}
+{% if selected_agent %}
+<div class="card"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Routers on {{ selected_agent.host }}
+  </h2>
+  {% if routers %}
+  <form method="post" action="{{ url_for('tools_routers_move') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="region" value="{{ region.name }}">
+    <input type="hidden" name="source_agent" value="{{ selected_agent.id }}">
+
+    <div class="flex flex-wrap items-end gap-3 mb-4">
+      <label class="block">
+        <span class="text-sm font-medium">Target L3 agent</span>
+        <select name="target_agent" required class="form-input mt-1">
+          <option value="">— choose a target —</option>
+          {% for a in target_agents %}
+            <option value="{{ a.id }}">
+              {{ a.host }} —
+              {{ 'up' if a.alive else 'down' }}{% if not a.admin_state_up %}, disabled{% endif %},
+              {{ a.router_count }} router(s)
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="btn btn-primary"
+              {% if not has_token %}disabled title="Sign in with Keystone to move routers"{% endif %}>
+        Move selected routers
+      </button>
+    </div>
+
+    <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-left text-gray-500 border-b">
+          <th class="py-1 pr-3"><input type="checkbox" id="check-all" class="form-checkbox"></th>
+          <th class="py-1 pr-4">Router</th>
+          <th class="py-1 pr-4">Project</th>
+          <th class="py-1 pr-4">Status</th>
+          <th class="py-1 pr-4">Type</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in routers %}
+          <tr class="border-b">
+            <td class="py-1 pr-3">
+              <input type="checkbox" name="router_ids" value="{{ r.id }}"
+                     class="form-checkbox router-check">
+            </td>
+            <td class="py-1 pr-4">
+              {{ r.name }}
+              <div class="text-xs text-gray-400 font-mono">{{ r.id }}</div>
+            </td>
+            <td class="py-1 pr-4">{{ r.project_name or r.project_id or '—' }}</td>
+            <td class="py-1 pr-4">
+              {{ r.status or '—' }}
+              {% if not r.admin_state_up %}
+                <span class="text-red-700">(admin down)</span>
+              {% endif %}
+            </td>
+            <td class="py-1 pr-4">
+              {% if r.distributed %}
+                <span class="text-xs bg-purple-50 text-purple-700 border border-purple-200 rounded px-1">DVR</span>
+              {% elif r.ha %}
+                <span class="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-1">HA</span>
+              {% else %}
+                <span class="text-xs text-gray-500">legacy</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </form>
+  {% else %}
+    <p class="text-sm text-gray-500">
+      This agent has no routers scheduled — nothing to move.
+    </p>
+  {% endif %}
+</div></div>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var all = document.getElementById('check-all');
+  if (!all) return;
+  all.addEventListener('change', function () {
+    document.querySelectorAll('.router-check').forEach(function (c) {
+      c.checked = all.checked;
+    });
+  });
+})();
+</script>
+{% endblock %}

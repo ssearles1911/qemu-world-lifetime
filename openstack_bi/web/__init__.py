@@ -122,12 +122,16 @@ def create_app() -> Flask:
             return redirect(url_for("login", next=request.path))
         return None
 
-    from . import auth_routes, setup_routes, admin_routes, instance_routes, routes
+    from . import (
+        auth_routes, setup_routes, admin_routes, instance_routes,
+        tools_routes, routes,
+    )
 
     auth_routes.register(app)
     setup_routes.register(app)
     admin_routes.register(app)
     instance_routes.register(app)
+    tools_routes.register(app)
     routes.register(app)
     return app
 

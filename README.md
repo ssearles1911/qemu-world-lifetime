@@ -33,6 +33,22 @@ architecture so new reports plug in without touching the CLI or web UI:
 | `spla_instances` | Licensing | Active VMs whose boot volume's Glance image name matches a configurable LIKE pattern (default `%SPLA%`); per-region vCPU/memory rollups. Keystone sessions get per-row live-migrate / console actions. |
 | `spla_hosts` | Licensing | Physical compute nodes carrying the SPLA placement trait (default `CUSTOM_MS_SPLA`), with vCPU count, derived physical cores, CPU model, and in-service date. Trait name is resolved to its id per region, with a trait-id override; per-region host/vCPU/core rollups. |
 
+## Admin tools
+
+Beyond the read-only reports, the **Tools** menu hosts operational
+actions that run against the live OpenStack services as the signed-in
+Keystone user. Listings are read straight from the regional database
+(fast, cheap); state-changing actions call the service API and need a
+Keystone-scoped session — a local-admin session can browse but not act,
+the same model as the per-instance Nova actions.
+
+| Tool | Purpose |
+| --- | --- |
+| L3 routers | Reschedule Neutron virtual routers between L3 agents. Pick a region, open the agent you're draining, select its routers, and move them to a healthy target agent — used to clear a network node before maintenance. Each router is removed from the source agent, then added to the target (safe for legacy, HA, and DVR routers). |
+
+Every move is written to the configuration audit log (`l3_router_move`
+or `l3_router_move_failed`).
+
 ## Why query the DB instead of the API or virsh?
 
 - **Centralized.** One MariaDB replica per region beats fanning SSH/virsh
