@@ -15,10 +15,11 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from flask import (
-    Flask, flash, redirect, render_template, request, session, url_for,
+    Flask, flash, jsonify, redirect, render_template, request, session,
+    url_for,
 )
 
-from .. import config_db, neutron, openstack
+from .. import config_db, netcheck, neutron, openstack
 from ..auth import token_store
 from ..auth.session import current_user, login_required
 from ..config import Region, keystone_db, keystone_region, parse_regions
@@ -33,6 +34,10 @@ def register(app: Flask) -> None:
     app.add_url_rule(
         "/tools/routers/move", view_func=routers_move,
         endpoint="tools_routers_move", methods=("POST",),
+    )
+    app.add_url_rule(
+        "/tools/routers/verify", view_func=routers_verify,
+        endpoint="tools_routers_verify", methods=("POST",),
     )
     app.add_url_rule("/tools/vlans", view_func=vlans, endpoint="tools_vlans")
     app.add_url_rule(
@@ -208,13 +213,119 @@ def routers_move():
 
     if moved:
         flash(
-            f"Moved {len(moved)} router(s) to the target L3 agent. "
-            "Re-open the source agent to confirm it is drained.",
+            f"Moved {len(moved)} router(s) to the target L3 agent — "
+            "verifying their reachability below.",
             "success",
         )
-    if not moved and not failed:
+        # Land on the target agent (where the routers now are) and let
+        # the page auto-run reachability verification.
+        return redirect(url_for(
+            "tools_routers", region=region_name, agent=target, verify=1,
+        ))
+    if not failed:
         flash("No routers were moved.", "info")
     return redirect(back)
+
+
+# Hard cap on a single verification batch — bounds how long a worker
+# thread can be held pinging.
+_MAX_VERIFY = 250
+
+
+@login_required
+def routers_verify():
+    """Ping the WAN IPs of the given routers and report reachability.
+
+    Read-only and server-side: it shells out to `ping`, never touches
+    the OpenStack API, and so needs no Keystone token (unlike the move).
+    That also lets the post-move auto-verify run for token-less sessions.
+    """
+    region_name = (request.form.get("region") or "").strip()
+    router_ids = [r for r in request.form.getlist("router_ids") if r]
+
+    region = _resolve_region(region_name)
+    if region is None:
+        return jsonify(ok=False, error=f"Unknown region {region_name!r}."), 400
+    if not router_ids:
+        return jsonify(ok=False, error="No routers to verify."), 400
+    if len(router_ids) > _MAX_VERIFY:
+        return jsonify(
+            ok=False,
+            error=f"Too many routers to verify at once (max {_MAX_VERIFY}).",
+        ), 400
+
+    try:
+        wan = neutron.router_wan_ips(region, router_ids)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify(
+            ok=False, error=f"Could not resolve router WAN IPs: {exc}",
+        ), 502
+
+    # One flat list of IPs to ping (a router may have >1 gateway IP).
+    all_ips: List[str] = []
+    for info in wan.values():
+        all_ips.extend(info["wan_ips"])
+    ping = netcheck.ping_hosts(all_ips)
+    pinged = ping["results"]
+    available = ping["ping_available"]
+
+    results: List[Dict] = []
+    reachable = unreachable = unknown = 0
+    for rid in router_ids:
+        info = wan.get(rid)
+        if info is None:
+            results.append({
+                "id": rid, "name": rid, "wan_ip": "",
+                "reachable": None, "latency_ms": None,
+                "note": "router not found",
+            })
+            unknown += 1
+            continue
+        ips = info["wan_ips"]
+        if not ips:
+            results.append({
+                "id": rid, "name": info["name"], "wan_ip": "",
+                "reachable": None, "latency_ms": None,
+                "note": "no gateway port",
+            })
+            unknown += 1
+            continue
+        # A router counts as reachable if any of its WAN IPs answers.
+        hit = next(
+            (pinged[i] for i in ips if pinged.get(i, {}).get("reachable")),
+            None,
+        )
+        res = hit or pinged.get(ips[0], {})
+        if not available:
+            verdict, note = None, ""
+            unknown += 1
+        elif res.get("reachable"):
+            verdict, note = True, res.get("note") or ""
+            reachable += 1
+        else:
+            verdict, note = False, res.get("note") or ""
+            unreachable += 1
+        results.append({
+            "id": rid, "name": info["name"],
+            "wan_ip": ", ".join(ips),
+            "reachable": verdict,
+            "latency_ms": res.get("latency_ms"),
+            "note": note,
+        })
+
+    summary = {
+        "total": len(router_ids),
+        "reachable": reachable,
+        "unreachable": unreachable,
+        "unknown": unknown,
+    }
+    _audit(
+        "l3_router_verify",
+        f"{region.name}: {reachable}/{len(router_ids)} reachable",
+    )
+    return jsonify(
+        ok=True, results=results, summary=summary, warning=ping["error"],
+    )
 
 
 # --- VLAN networks ----------------------------------------------------------

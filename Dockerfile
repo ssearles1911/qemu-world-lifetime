@@ -13,9 +13,13 @@
 FROM python:3.12-slim
 
 # tini reaps zombies and forwards signals cleanly. matplotlib + openpyxl
-# pull in their own wheels, so no compiler is needed here.
+# pull in their own wheels, so no compiler is needed here. iputils-ping
+# backs the L3-router reachability check; setcap (libcap2-bin) grants the
+# `ping` binary the NET_RAW capability so the non-root app user can ping
+# regardless of the host's net.ipv4.ping_group_range sysctl.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tini \
+ && apt-get install -y --no-install-recommends tini iputils-ping libcap2-bin \
+ && setcap cap_net_raw+ep /usr/bin/ping \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

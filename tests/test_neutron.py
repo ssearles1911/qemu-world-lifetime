@@ -138,6 +138,26 @@ def test_routers_on_l3_agent_normalizes_flags(monkeypatch):
     assert routers["r2"]["gateway_ip"] == ""              # no gateway port
 
 
+def test_router_wan_ips_splits_and_handles_missing(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"id": "r1", "name": "edge", "gateway_ips": "203.0.113.5, 203.0.113.6"},
+        {"id": "r2", "name": None, "gateway_ips": None},
+    ])
+    out = neutron.router_wan_ips(_REGION, ["r1", "r2"])
+    assert out["r1"]["wan_ips"] == ["203.0.113.5", "203.0.113.6"]
+    assert out["r2"]["wan_ips"] == []          # no gateway port
+    assert out["r2"]["name"] == "(unnamed)"
+
+
+def test_router_wan_ips_empty_input_skips_query(monkeypatch):
+    called = []
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: called.append(a) or [])
+    assert neutron.router_wan_ips(_REGION, []) == {}
+    assert called == []
+
+
 # --- VLAN networks ----------------------------------------------------------
 
 def test_create_vlan_network_posts_provider_attributes():
