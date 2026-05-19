@@ -59,7 +59,7 @@
     </thead>
     <tbody>
       {% for a in agents %}
-        <tr class="border-b {% if selected_agent and a.id == selected_agent.id %}bg-accent{% endif %}">
+        <tr class="border-b {% if selected_agent and a.id == selected_agent.id %}bg-secondary/30{% endif %}">
           <td class="py-1 pr-4 font-mono">{{ a.host }}</td>
           <td class="py-1 pr-4">
             {% if a.alive %}
