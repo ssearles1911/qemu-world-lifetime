@@ -31,6 +31,7 @@ architecture so new reports plug in without touching the CLI or web UI:
 | `volume_history` | Lifecycle | Cinder metadata + attachment timeline for one volume UUID (drill-down). |
 | `volume_resizes` | Lifecycle | Cinder volume extend events in the last N days (limited by `cinder.messages` retention). |
 | `spla_instances` | Licensing | Active VMs whose boot volume's Glance image name matches a configurable LIKE pattern (default `%SPLA%`); per-region vCPU/memory rollups. Keystone sessions get per-row live-migrate / console actions. |
+| `spla_hosts` | Licensing | Physical compute nodes carrying the SPLA placement trait (default `CUSTOM_MS_SPLA`), with vCPU count, derived physical cores, CPU model, and in-service date. Trait name is resolved to its id per region, with a trait-id override; per-region host/vCPU/core rollups. |
 
 ## Why query the DB instead of the API or virsh?
 

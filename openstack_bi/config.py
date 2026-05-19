@@ -7,8 +7,8 @@ var still consulted by this module is the SQLite path itself, resolved
 inside `config_db`.
 
 Public API (`Region`, `parse_regions`, `resolve_regions`, `keystone_region`,
-`keystone_db`, `nova_api_db`, `cinder_db`, `glance_db`, `neutron_db`) is
-unchanged so reports and the CLI dispatcher don't have to.
+`keystone_db`, `nova_api_db`, `cinder_db`, `glance_db`, `neutron_db`,
+`placement_db`) is unchanged so reports and the CLI dispatcher don't have to.
 """
 
 from __future__ import annotations
@@ -109,3 +109,7 @@ def glance_db() -> str:
 
 def neutron_db() -> str:
     return config_db.get_schema_name("neutron")
+
+
+def placement_db() -> str:
+    return config_db.get_schema_name("placement")
