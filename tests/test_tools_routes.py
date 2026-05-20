@@ -324,6 +324,32 @@ def test_vlans_create_blocked_by_segment_conflict(client, monkeypatch):
     assert called == []  # a conflicting segment blocks the create
 
 
+def test_vlan_list_page_requires_login(client):
+    r = client.get("/tools/vlans/list")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_vlan_list_page_renders(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    monkeypatch.setattr(neutron, "list_vlan_networks", lambda region: [
+        {"id": "n1", "name": "acme-vlan", "status": "ACTIVE",
+         "admin_state_up": True, "project_id": "p1",
+         "physical_network": "vlan", "segmentation_id": 815},
+    ])
+    # _project_directory hits Keystone; with no real DB it falls back to {}
+    # and the page still renders with empty project / domain cells.
+    r = client.get("/tools/vlans/list")
+    assert r.status_code == 200
+    assert b"acme-vlan" in r.data
+    assert b"vlan-search" in r.data        # the search input is present
+    assert b"815" in r.data                # VLAN id column rendered
+    assert b"sortable" in r.data           # column headers are sortable
+    assert b"data-table" in r.data         # uses the shared data-table styling
+
+
 def test_vlans_create_calls_neutron(client, monkeypatch):
     _login_keystone(client)
     from openstack_bi import neutron
