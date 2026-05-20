@@ -216,6 +216,39 @@ def vlan_networks_for_project(
     return networks
 
 
+def list_vlan_networks(region: Region) -> List[Dict[str, Any]]:
+    """Every VLAN network in `region` with its name, owning project,
+    physnet, segmentation id, and state. Sorted by VLAN id.
+
+    Used by the region-wide VLAN list tool. The owning project's name
+    and domain are resolved by the caller — the `networks` table only
+    has `project_id`.
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT n.id, n.name, n.status, n.admin_state_up, n.project_id,
+               ns.physical_network, ns.segmentation_id
+        FROM networksegments ns
+        JOIN networks n ON n.id = ns.network_id
+        WHERE ns.network_type = 'vlan'
+        ORDER BY ns.segmentation_id, n.name
+        """,
+    )
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "name": r.get("name") or "(unnamed)",
+            "status": r.get("status") or "",
+            "admin_state_up": bool(r.get("admin_state_up")),
+            "project_id": r.get("project_id") or "",
+            "physical_network": r.get("physical_network") or "",
+            "segmentation_id": r.get("segmentation_id"),
+        })
+    return out
+
+
 def vlan_segment_conflict(
     region: Region, physical_network: str, segmentation_id: int
 ) -> Optional[Dict[str, str]]:

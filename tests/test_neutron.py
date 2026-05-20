@@ -206,6 +206,22 @@ def test_vlan_segment_conflict_free(monkeypatch):
     assert neutron.vlan_segment_conflict(_REGION, "vlan", 815) is None
 
 
+def test_list_vlan_networks_normalizes(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"id": "n1", "name": None, "status": "ACTIVE", "admin_state_up": 1,
+         "project_id": "p1", "physical_network": "vlan", "segmentation_id": 100},
+        {"id": "n2", "name": "acme", "status": "DOWN", "admin_state_up": 0,
+         "project_id": "p2", "physical_network": "vlan", "segmentation_id": 815},
+    ])
+    nets = {n["id"]: n for n in neutron.list_vlan_networks(_REGION)}
+    assert nets["n1"]["name"] == "(unnamed)"
+    assert nets["n1"]["admin_state_up"] is True
+    assert nets["n1"]["segmentation_id"] == 100
+    assert nets["n2"]["admin_state_up"] is False
+    assert nets["n2"]["physical_network"] == "vlan"
+
+
 def test_vlan_networks_for_project_normalizes(monkeypatch):
     monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
     monkeypatch.setattr(neutron, "query", lambda *a, **k: [

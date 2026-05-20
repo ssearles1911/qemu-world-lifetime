@@ -29,5 +29,15 @@
       </p>
     </div>
   </a>
+  <a href="{{ url_for('tools_vlan_list') }}"
+     class="card hover:shadow-md transition-shadow block">
+    <div class="card-body">
+      <h3 class="font-semibold text-lg mb-1">VLAN list</h3>
+      <p class="text-sm text-gray-600">
+        Every VLAN network in a region, with its owning project, domain,
+        physnet, segmentation id, and state. Read-only.
+      </p>
+    </div>
+  </a>
 </div>
 {% endblock %}

@@ -1,0 +1,158 @@
+{% extends "tools/_layout.html" %}
+{% block tools_body %}
+<h1 class="text-2xl font-semibold mb-2">VLAN list</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Every VLAN network in the region, with its owning project, domain,
+  physnet, segmentation id, and state. Read-only.
+</p>
+
+{% if error %}
+  <div class="px-4 py-2 rounded text-sm bg-red-100 text-red-800 border border-red-200 mb-4">
+    {{ error }}
+  </div>
+{% endif %}
+
+{% if regions %}
+<form method="get" class="mb-4 flex items-end gap-3">
+  <label class="block">
+    <span class="text-sm font-medium">Region</span>
+    <select name="region" class="form-input mt-1" onchange="this.form.submit()">
+      {% for r in regions %}
+        <option value="{{ r.name }}"
+                {% if region and r.name == region.name %}selected{% endif %}>
+          {{ r.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit" class="btn btn-primary">Load</button></noscript>
+</form>
+
+<div class="mb-3">
+  <input type="search" id="vlan-search" class="form-input w-full md:w-1/2"
+         placeholder="Filter — network, project, domain, VLAN, physnet…"
+         autocomplete="off">
+</div>
+
+<div class="card"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    VLAN networks in {{ region.name }}
+    <span class="text-gray-400 font-normal">({{ networks|length }})</span>
+  </h2>
+  {% if networks %}
+  <div class="overflow-x-auto">
+  <table class="data-table" id="vlan-table">
+    <thead>
+      <tr>
+        <th class="sortable" data-numeric="0">
+          <span>Network</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Network ID</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Project</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Domain</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable text-right" data-numeric="1">
+          <span>VLAN</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Physnet</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>State</span><span class="sort-icon">▲▼</span>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for n in networks %}
+        <tr class="vlan-row"
+            data-filter="{{ (n.name ~ ' ' ~ n.id ~ ' ' ~ n.project_name ~ ' ' ~ n.domain_name ~ ' ' ~ (n.segmentation_id|string) ~ ' ' ~ n.physical_network)|lower }}">
+          <td>{{ n.name }}</td>
+          <td class="font-mono text-xs">{{ n.id }}</td>
+          <td>{{ n.project_name or n.project_id or '—' }}</td>
+          <td>{{ n.domain_name or '—' }}</td>
+          <td class="text-right tabular-nums">{{ n.segmentation_id }}</td>
+          <td class="font-mono">{{ n.physical_network }}</td>
+          <td>
+            {{ n.status or '—' }}
+            {% if not n.admin_state_up %}
+              <span class="text-red-700">(admin down)</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p id="vlan-empty" class="hidden text-sm text-gray-500 mt-3">
+    No VLAN networks match that filter.
+  </p>
+  {% else %}
+    <p class="text-sm text-gray-500">No VLAN networks in this region.</p>
+  {% endif %}
+</div></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  // Type-to-search filter.
+  var input = document.getElementById('vlan-search');
+  var empty = document.getElementById('vlan-empty');
+  if (!input) return;
+  var rows = document.querySelectorAll('.vlan-row');
+  input.addEventListener('input', function () {
+    var q = (input.value || '').trim().toLowerCase();
+    var visible = 0;
+    rows.forEach(function (row) {
+      var match = !q || (row.dataset.filter || '').indexOf(q) !== -1;
+      row.hidden = !match;
+      if (match) visible++;
+    });
+    if (empty) empty.classList.toggle('hidden', visible > 0);
+  });
+})();
+
+(function () {
+  // Click-to-sort headers — same pattern as report.html. Sort composes
+  // with the search filter (hidden rows stay hidden, just reordered).
+  var table = document.getElementById('vlan-table');
+  if (!table || !table.tHead) return;
+  var headers = table.tHead.querySelectorAll('th.sortable');
+  headers.forEach(function (th, idx) {
+    th.addEventListener('click', function () {
+      var asc = !th.classList.contains('sort-asc');
+      headers.forEach(function (h) {
+        h.classList.remove('sort-asc', 'sort-desc');
+        h.removeAttribute('aria-sort');
+      });
+      th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+      th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+      var numeric = th.dataset.numeric === '1';
+      var tbody = table.tBodies[0];
+      if (!tbody) return;
+      var rows = Array.prototype.slice.call(tbody.children);
+      rows.sort(function (a, b) {
+        var av = (a.cells[idx] && a.cells[idx].textContent || '').trim();
+        var bv = (b.cells[idx] && b.cells[idx].textContent || '').trim();
+        if (numeric) {
+          var an = parseFloat(av.replace(/[, ]/g, ''));
+          var bn = parseFloat(bv.replace(/[, ]/g, ''));
+          if (isNaN(an) && isNaN(bn)) return 0;
+          if (isNaN(an)) return 1;
+          if (isNaN(bn)) return -1;
+          return asc ? an - bn : bn - an;
+        }
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+})();
+</script>
+{% endblock %}
