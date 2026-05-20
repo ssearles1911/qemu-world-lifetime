@@ -44,6 +44,9 @@ def register(app: Flask) -> None:
         "/tools/vlans/create", view_func=vlans_create,
         endpoint="tools_vlans_create", methods=("POST",),
     )
+    app.add_url_rule(
+        "/tools/vlans/list", view_func=vlan_list, endpoint="tools_vlan_list",
+    )
 
 
 def _regions() -> List[Region]:
@@ -484,3 +487,89 @@ def vlans_create():
         "success",
     )
     return redirect(back)
+
+
+def _project_directory(project_ids) -> Dict[str, Dict[str, str]]:
+    """Map `project_id` -> `{"name", "domain"}` via the Keystone DB.
+
+    Two-pass lookup: projects first (gives us each project's
+    `domain_id`), then those domain ids resolved to names. Best-effort
+    — a Keystone read failure returns `{}` rather than blowing up the
+    listing page.
+    """
+    pids = sorted({pid for pid in project_ids if pid})
+    if not pids:
+        return {}
+    placeholders = ",".join(["%s"] * len(pids))
+    try:
+        proj_rows = query(
+            keystone_region(), keystone_db(),
+            f"SELECT id, name, domain_id FROM project WHERE id IN ({placeholders})",
+            pids,
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    name_by_pid = {r["id"]: r.get("name") or "" for r in proj_rows}
+    dom_id_by_pid = {r["id"]: r.get("domain_id") for r in proj_rows}
+    dom_ids = sorted({d for d in dom_id_by_pid.values() if d})
+    domain_name_by_id: Dict[str, str] = {}
+    if dom_ids:
+        ph2 = ",".join(["%s"] * len(dom_ids))
+        try:
+            drows = query(
+                keystone_region(), keystone_db(),
+                f"SELECT id, name FROM project WHERE id IN ({ph2}) "
+                "AND is_domain = 1",
+                dom_ids,
+            )
+            domain_name_by_id = {r["id"]: r.get("name") or "" for r in drows}
+        except Exception:  # noqa: BLE001
+            pass
+    out: Dict[str, Dict[str, str]] = {}
+    for pid in pids:
+        out[pid] = {
+            "name": name_by_pid.get(pid, ""),
+            "domain": domain_name_by_id.get(dom_id_by_pid.get(pid), ""),
+        }
+    return out
+
+
+@login_required
+def vlan_list():
+    """Read-only list of every VLAN network in a region.
+
+    Sister page to the per-project VLAN panel — same data shape, just
+    not filtered by project. Showing project + domain inline so an
+    operator can scan tenancy at a glance.
+    """
+    regions = _regions()
+    if not regions:
+        flash("No regions are configured.", "error")
+        return render_template(
+            "tools/vlan_list.html",
+            regions=[], region=None, networks=[], error=None,
+        )
+
+    region_name = request.args.get("region") or regions[0].name
+    region = _resolve_region(region_name)
+    if region is None:
+        flash(f"Unknown region {region_name!r}.", "error")
+        region = regions[0]
+
+    error: Optional[str] = None
+    networks: List[Dict] = []
+    try:
+        networks = neutron.list_vlan_networks(region)
+    except Exception as exc:  # noqa: BLE001
+        error = f"Could not list VLAN networks for {region.name}: {exc}"
+
+    directory = _project_directory([n["project_id"] for n in networks])
+    for n in networks:
+        info = directory.get(n["project_id"], {})
+        n["project_name"] = info.get("name", "")
+        n["domain_name"] = info.get("domain", "")
+
+    return render_template(
+        "tools/vlan_list.html",
+        regions=regions, region=region, networks=networks, error=error,
+    )
