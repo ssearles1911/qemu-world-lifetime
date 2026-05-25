@@ -18,9 +18,11 @@ from . import domain_leaderboard  # noqa: F401
 from . import fip_audit  # noqa: F401
 from . import fip_pools  # noqa: F401
 from . import fip_subnets  # noqa: F401
+from . import host_capacity  # noqa: F401
 from . import instance_history  # noqa: F401
 from . import instance_leaderboard  # noqa: F401
 from . import issues  # noqa: F401
+from . import locate_instance  # noqa: F401
 from . import project_growth  # noqa: F401
 from . import qemu_lifetime  # noqa: F401
 from . import snapshot_leaderboard  # noqa: F401
@@ -41,7 +43,9 @@ _ORDER = [
     fip_audit,
     fip_pools,
     fip_subnets,
+    host_capacity,
     instance_history,
+    locate_instance,
     volume_history,
     volume_resizes,
     spla_instances,

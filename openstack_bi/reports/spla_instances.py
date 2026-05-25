@@ -234,14 +234,16 @@ class SplaInstancesReport(Report):
         ),
         Param(
             name="host_include_pattern", label="Host name LIKE", kind="string",
-            placeholder="(empty = no host include filter)",
+            default="%mkvm%",
+            placeholder="%mkvm%",
             advanced=True,
-            help="Restrict to compute hosts whose name matches this LIKE pattern.",
+            help="Restrict to compute hosts whose name matches this LIKE "
+                 "pattern. Defaults to the mkvm builder-host pattern; clear "
+                 "it for no host include filter.",
         ),
         Param(
             name="host_exclude_pattern", label="Host name NOT LIKE", kind="string",
-            default="%mkvm%",
-            placeholder="%mkvm%",
+            placeholder="(empty = no host exclude filter)",
             advanced=True,
             help="Exclude compute hosts whose name matches this LIKE pattern.",
         ),

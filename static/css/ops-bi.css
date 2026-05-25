@@ -228,6 +228,52 @@
 }
 
 /* ============================================================================
+   Per-cell heat-map shading
+   ----------------------------------------------------------------------------
+   Opt-in via a `<col>_shade` companion field on a report row (see report.html
+   td_cell). Used by capacity-style reports to tint individual cells by
+   threshold. Cell (td) backgrounds paint over the tr:hover background, so the
+   shade survives hover without extra hover rules. Palette matches the
+   severity/status badges for a consistent green / orange / red language.
+   ============================================================================ */
+
+/* ---------- Light mode ---------- */
+.data-table td.cell-shade-green {
+    background-color: #D1FAE5;
+    color: #065F46;
+}
+.data-table td.cell-shade-orange {
+    background-color: #FEF3C7;
+    color: #92400E;
+}
+.data-table td.cell-shade-red {
+    background-color: #FEE2E2;
+    color: #991B1B;
+}
+.data-table td.cell-shade-gray {
+    background-color: #F3F4F6;
+    color: #4B5563;
+}
+
+/* ---------- Dark mode ---------- */
+[data-theme="dark"] .data-table td.cell-shade-green {
+    background-color: rgba(0, 230, 118, 0.16);
+    color: #6ee7b7;
+}
+[data-theme="dark"] .data-table td.cell-shade-orange {
+    background-color: rgba(255, 179, 0, 0.16);
+    color: #ffd166;
+}
+[data-theme="dark"] .data-table td.cell-shade-red {
+    background-color: rgba(255, 82, 82, 0.18);
+    color: #ff9a9a;
+}
+[data-theme="dark"] .data-table td.cell-shade-gray {
+    background-color: rgba(148, 163, 184, 0.16);
+    color: #cbd5e1;
+}
+
+/* ============================================================================
    Sticky table headers + sort affordances
    ============================================================================ */
 

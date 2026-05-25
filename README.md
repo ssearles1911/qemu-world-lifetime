@@ -27,7 +27,9 @@ architecture so new reports plug in without touching the CLI or web UI:
 | `fip_audit` | Capacity | Unbound floating IPs per project and region, sorted oldest-first. |
 | `fip_pools` | Capacity | Per-region external-network FIP pool utilization (used / free / bound / unbound). |
 | `fip_subnets` | Capacity | Per-subnet, per-allocation-pool drill-down of FIP-bearing external networks (CIDR, gateway, range bounds, used vs. free). Per-region TOTAL row. |
+| `host_capacity` | Capacity | Per-compute-host CPU/memory capacity, allocated vs. capacity, instance count, utilization percentages, and oversubscription ratio. Numeric cells are colour-shaded green/orange/red by configurable thresholds; nova-compute enabled/disabled shows green/red. |
 | `instance_history` | Lifecycle | Full Nova `instance_actions` log for one instance UUID, across every region and cell (drill-down). |
+| `locate_instance` | Lifecycle | Find an instance by name or hostname (with wildcards), UUID, compute host, Keystone domain, or project across the selected datacenters and cells, in any state; per-region vCPU/memory rollups. Keystone sessions get per-row live-migrate / console actions. |
 | `volume_history` | Lifecycle | Cinder metadata + attachment timeline for one volume UUID (drill-down). |
 | `volume_resizes` | Lifecycle | Cinder volume extend events in the last N days (limited by `cinder.messages` retention). |
 | `spla_instances` | Licensing | Active VMs whose boot volume's Glance image name matches a configurable LIKE pattern (default `%SPLA%`); per-region vCPU/memory rollups. Keystone sessions get per-row live-migrate / console actions. |
@@ -252,8 +254,9 @@ about an hour, after which the action prompts for a fresh sign-in.
 
 ## Instance actions
 
-When signed in via **Keystone**, the **SPLA-licensed instances** report
-gains an **Actions** column with two per-row operations:
+When signed in via **Keystone**, the **SPLA-licensed instances** and
+**Locate instance** reports gain an **Actions** column with two per-row
+operations:
 
 - **Live migrate** — opens an in-page dialog to pick a target host (the
   `nova-compute` hosts in that instance's region, fetched live from
