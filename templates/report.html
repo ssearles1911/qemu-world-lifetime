@@ -41,6 +41,12 @@
   {%- if col_key == 'uuid' %}{% set _ = classes.append('font-mono') %}{% set _ = classes.append('text-xs') %}{% set _ = classes.append('text-gray-500') %}{% endif -%}
   {%- if col_key in ('last_action_time', 'age', 'created_at') %}{% set _ = classes.append('whitespace-nowrap') %}{% endif -%}
   {%- if col_key in numeric_cols %}{% set _ = classes.append('text-right') %}{% set _ = classes.append('tabular-nums') %}{% set _ = classes.append('whitespace-nowrap') %}{% endif -%}
+  {#- Heat-map shading: a row may carry a `<col>_shade` companion field set
+      to one of a small whitelist (green/orange/red/gray). When present, tint
+      the cell background so capacity-style tables read as a heat map. The
+      whitelist keeps report code from injecting arbitrary classes. -#}
+  {%- set shade = row.get(col_key + '_shade') if row else None -%}
+  {%- if shade in ('green', 'orange', 'red', 'gray') %}{% set _ = classes.append('cell-shade-' ~ shade) %}{% endif -%}
   {#- Drill-down: a row may carry a `<col>_link` companion field. When
       present and non-empty, render the cell value wrapped in an anchor
       so the user can navigate into a related report. -#}
