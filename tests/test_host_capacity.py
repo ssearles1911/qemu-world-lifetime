@@ -146,11 +146,31 @@ def test_enabled_disabled_status_and_shade(monkeypatch):
         "CVG": [],
     })
     _install(monkeypatch, backend)
-    rows = _by_host(host_capacity.REPORT.run())
+    # include_disabled=True so the disabled host is in scope to render.
+    rows = _by_host(host_capacity.REPORT.run(include_disabled=True))
     assert rows["on"]["service"] == "Enabled"
     assert rows["on"]["service_shade"] == "green"
     assert rows["off"]["service"] == "Disabled"
     assert rows["off"]["service_shade"] == "red"
+
+
+def test_disabled_hosts_excluded_by_default(monkeypatch):
+    # Default run must add the disabled-exclusion clause to the SQL.
+    backend = FakeBackend(host_rows={"DTW": [_node("on", disabled=0)], "CVG": []})
+    _install(monkeypatch, backend)
+    host_capacity.REPORT.run()
+    sql = next(q[2] for q in backend.queries if "compute_nodes" in q[2])
+    assert "s.disabled = 0 OR s.disabled IS NULL" in sql
+    assert host_capacity.REPORT.run().metadata["disabled_hosts_filter"] == "excluded"
+
+
+def test_include_disabled_drops_the_filter(monkeypatch):
+    backend = FakeBackend(host_rows={"DTW": [_node("on", disabled=0)], "CVG": []})
+    _install(monkeypatch, backend)
+    result = host_capacity.REPORT.run(include_disabled=True)
+    sql = next(q[2] for q in backend.queries if "compute_nodes" in q[2])
+    assert "s.disabled = 0 OR s.disabled IS NULL" not in sql
+    assert result.metadata["disabled_hosts_filter"] == "included"
 
 
 def test_missing_service_is_unknown(monkeypatch):
@@ -189,7 +209,7 @@ def test_region_fan_out_and_rollups(monkeypatch):
         "CVG": [_node("cvg-1", vcpus=32, vcpus_used=16, running_vms=3, disabled=0)],
     })
     _install(monkeypatch, backend)
-    result = host_capacity.REPORT.run()
+    result = host_capacity.REPORT.run(include_disabled=True)
     assert result.metadata["total_hosts"] == 3
     assert result.metadata["enabled_hosts"] == 2
     assert result.metadata["disabled_hosts"] == 1
@@ -258,7 +278,7 @@ def test_report_page_renders_cell_shading(monkeypatch, tmp_config_db):
             "is_admin": True,
         }
 
-    resp = client.get("/report/host_capacity?regions=dfw")
+    resp = client.get("/report/host_capacity?regions=dfw&include_disabled=1")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     # All three shade bands made it into the rendered table.

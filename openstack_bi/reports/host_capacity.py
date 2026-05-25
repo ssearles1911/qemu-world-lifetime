@@ -42,27 +42,39 @@ DEFAULT_MEM_WARN_PCT = 80
 DEFAULT_MEM_CRIT_PCT = 90
 
 
-# Per-cell query: every live compute node plus its nova-compute service
-# row (LEFT JOIN so a node with no matching service still lists, with an
-# unknown enabled/disabled state).
-_HOST_SQL = """
-    SELECT
-        cn.hypervisor_hostname AS hostname,
-        cn.host                AS host,
-        cn.vcpus               AS vcpus,
-        cn.vcpus_used          AS vcpus_used,
-        cn.memory_mb           AS memory_mb,
-        cn.memory_mb_used      AS memory_mb_used,
-        cn.running_vms         AS running_vms,
-        s.disabled             AS disabled
-    FROM compute_nodes cn
-    LEFT JOIN services s
-      ON s.host = cn.host
-     AND s.binary = 'nova-compute'
-     AND s.deleted = 0
-    WHERE cn.deleted = 0
-    ORDER BY cn.hypervisor_hostname
-"""
+def _host_sql(include_disabled: bool) -> str:
+    """Per-cell query: every live compute node plus its nova-compute service
+    row (LEFT JOIN so a node with no matching service still lists, with an
+    unknown enabled/disabled state).
+
+    When `include_disabled` is False (the default), hosts whose nova-compute
+    service is disabled are filtered out. Hosts with no matching service row
+    (unknown state) are kept either way — they aren't "disabled", just
+    missing an accounting record.
+    """
+    disabled_clause = (
+        "" if include_disabled
+        else "AND (s.disabled = 0 OR s.disabled IS NULL)"
+    )
+    return f"""
+        SELECT
+            cn.hypervisor_hostname AS hostname,
+            cn.host                AS host,
+            cn.vcpus               AS vcpus,
+            cn.vcpus_used          AS vcpus_used,
+            cn.memory_mb           AS memory_mb,
+            cn.memory_mb_used      AS memory_mb_used,
+            cn.running_vms         AS running_vms,
+            s.disabled             AS disabled
+        FROM compute_nodes cn
+        LEFT JOIN services s
+          ON s.host = cn.host
+         AND s.binary = 'nova-compute'
+         AND s.deleted = 0
+        WHERE cn.deleted = 0
+          {disabled_clause}
+        ORDER BY cn.hypervisor_hostname
+    """
 
 
 def _region_choices() -> List[Tuple[str, str]]:
@@ -110,6 +122,12 @@ class HostCapacityReport(Report):
             help="Which datacenters to span. Empty = all configured.",
         ),
         Param(
+            name="include_disabled", label="Include disabled hosts",
+            kind="bool", default=False, advanced=True,
+            help="Off by default: hosts whose nova-compute service is "
+                 "disabled are hidden. Check to include them.",
+        ),
+        Param(
             name="cpu_warn_pct", label="CPU warn percent", kind="int",
             default=DEFAULT_CPU_WARN_PCT, advanced=True,
             help="CPU allocation percent (allocated vCPU / physical vCPU) at "
@@ -138,6 +156,7 @@ class HostCapacityReport(Report):
     def run(
         self,
         regions: Optional[List[str]] = None,
+        include_disabled: bool = False,
         cpu_warn_pct: Optional[int] = DEFAULT_CPU_WARN_PCT,
         cpu_crit_pct: Optional[int] = DEFAULT_CPU_CRIT_PCT,
         mem_warn_pct: Optional[int] = DEFAULT_MEM_WARN_PCT,
@@ -150,6 +169,7 @@ class HostCapacityReport(Report):
         cpu_crit = cpu_crit_pct if cpu_crit_pct is not None else DEFAULT_CPU_CRIT_PCT
         mem_warn = mem_warn_pct if mem_warn_pct is not None else DEFAULT_MEM_WARN_PCT
         mem_crit = mem_crit_pct if mem_crit_pct is not None else DEFAULT_MEM_CRIT_PCT
+        include_disabled = bool(include_disabled)
 
         selected_region_names = regions or None
         if selected_region_names is None:
@@ -160,10 +180,12 @@ class HostCapacityReport(Report):
                 by_name[n] for n in selected_region_names if n in by_name
             ]
 
+        host_sql = _host_sql(include_disabled)
+
         def _collect(region: Region) -> List[Dict[str, Any]]:
             host_rows: List[Dict[str, Any]] = []
             for cell in openstack.list_cells(region):
-                for row in query(region, cell, _HOST_SQL):
+                for row in query(region, cell, host_sql):
                     row["region"] = region.name
                     host_rows.append(row)
             return host_rows
@@ -262,6 +284,7 @@ class HostCapacityReport(Report):
 
         metadata: Dict[str, Any] = {
             "regions": ", ".join(r.name for r in selected_regions) or "(none)",
+            "disabled_hosts_filter": "included" if include_disabled else "excluded",
             "total_hosts": len(rows_out),
             "enabled_hosts": enabled,
             "disabled_hosts": disabled,
