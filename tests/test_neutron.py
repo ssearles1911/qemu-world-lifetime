@@ -138,6 +138,90 @@ def test_routers_on_l3_agent_normalizes_flags(monkeypatch):
     assert routers["r2"]["gateway_ip"] == ""              # no gateway port
 
 
+# --- DHCP agents ------------------------------------------------------------
+
+def test_list_dhcp_agents_marks_alive(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    rows = [
+        {"id": "d1", "host": "net-1", "admin_state_up": 1,
+         "availability_zone": "nova", "heartbeat_age": 12, "network_count": 17},
+        {"id": "d2", "host": "net-2", "admin_state_up": 0,
+         "availability_zone": "nova", "heartbeat_age": 600, "network_count": 0},
+    ]
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: rows)
+    agents = {a["id"]: a for a in neutron.list_dhcp_agents(_REGION)}
+    assert agents["d1"]["alive"] is True
+    assert agents["d2"]["alive"] is False
+    assert agents["d2"]["admin_state_up"] is False
+    assert agents["d1"]["network_count"] == 17
+
+
+def test_networks_on_dhcp_agent_normalizes(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"id": "n1", "name": None, "status": "ACTIVE", "admin_state_up": 1,
+         "project_id": "p1", "network_types": "vlan", "segment_ids": "100"},
+        {"id": "n2", "name": "acme", "status": "ACTIVE", "admin_state_up": 0,
+         "project_id": "p2", "network_types": "vxlan", "segment_ids": "1234"},
+    ])
+    nets = {n["id"]: n for n in neutron.networks_on_dhcp_agent(_REGION, "d1")}
+    assert nets["n1"]["name"] == "(unnamed)"
+    assert nets["n1"]["network_types"] == "vlan"
+    assert nets["n2"]["admin_state_up"] is False
+
+
+def test_add_network_to_dhcp_agent_posts_expected_body():
+    sess = MagicMock()
+    sess.request.return_value = _resp(201, {"network_id": "n1"})
+
+    neutron.add_network_to_dhcp_agent(sess, "dtw", "agent-1", "n1")
+
+    path, method = sess.request.call_args[0]
+    kwargs = sess.request.call_args[1]
+    assert path == "/v2.0/agents/agent-1/dhcp-networks"
+    assert method == "POST"
+    assert kwargs["json"] == {"network_id": "n1"}
+    assert kwargs["endpoint_filter"]["service_type"] == "network"
+    assert kwargs["endpoint_filter"]["region_name"] == "dtw"
+
+
+def test_remove_network_from_dhcp_agent_issues_delete():
+    sess = MagicMock()
+    sess.request.return_value = _resp(204)
+
+    neutron.remove_network_from_dhcp_agent(sess, "dtw", "agent-1", "n1")
+
+    path, method = sess.request.call_args[0]
+    assert path == "/v2.0/agents/agent-1/dhcp-networks/n1"
+    assert method == "DELETE"
+
+
+def test_move_network_removes_from_source_then_adds_to_target():
+    sess = MagicMock()
+    sess.request.return_value = _resp(204)
+
+    neutron.move_network(sess, "dtw", "n1", "src-agent", "dst-agent")
+
+    seq = [(c.args[1], c.args[0]) for c in sess.request.call_args_list]
+    assert seq == [
+        ("DELETE", "/v2.0/agents/src-agent/dhcp-networks/n1"),
+        ("POST", "/v2.0/agents/dst-agent/dhcp-networks"),
+    ]
+
+
+def test_move_network_reports_unscheduled_when_add_fails():
+    sess = MagicMock()
+    sess.request.side_effect = [
+        _resp(204),
+        _resp(409, {"NeutronError": {"message": "agent unavailable"}}),
+    ]
+    with pytest.raises(neutron.NeutronError) as excinfo:
+        neutron.move_network(sess, "dtw", "n1", "src", "dst")
+    msg = str(excinfo.value)
+    assert "unscheduled" in msg
+    assert "agent unavailable" in msg
+
+
 def test_router_wan_ips_splits_and_handles_missing(monkeypatch):
     monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
     monkeypatch.setattr(neutron, "query", lambda *a, **k: [

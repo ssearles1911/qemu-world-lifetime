@@ -172,6 +172,112 @@ def test_move_all_failed_redirects_to_source_without_verify(client, monkeypatch)
 
 # --- Router reachability verification ---------------------------------------
 
+# --- DHCP-agent tool --------------------------------------------------------
+
+def test_dhcp_page_requires_login(client):
+    r = client.get("/tools/dhcp")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_dhcp_page_lists_agents(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    monkeypatch.setattr(neutron, "list_dhcp_agents", lambda region: [
+        {"id": "d1", "host": "net-1", "admin_state_up": True,
+         "availability_zone": "nova", "heartbeat_age": 5, "alive": True,
+         "network_count": 4},
+    ])
+    r = client.get("/tools/dhcp")
+    assert r.status_code == 200
+    assert b"net-1" in r.data
+    assert b"DHCP agents in" in r.data
+
+
+def test_dhcp_move_requires_keystone_token(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    called = []
+    monkeypatch.setattr(neutron, "move_network", lambda *a, **k: called.append(a))
+    r = client.post("/tools/dhcp/move", data={
+        "region": "dtw", "source_agent": "d1", "target_agent": "d2",
+        "network_ids": ["n1"],
+    })
+    assert r.status_code == 302
+    assert called == []
+
+
+def test_dhcp_move_rejects_same_source_and_target(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    called = []
+    monkeypatch.setattr(neutron, "move_network", lambda *a, **k: called.append(a))
+    r = client.post("/tools/dhcp/move", data={
+        "region": "dtw", "source_agent": "d1", "target_agent": "d1",
+        "network_ids": ["n1"],
+    })
+    assert r.status_code == 302
+    assert called == []
+
+
+def test_dhcp_page_shows_rebalance_recommendation(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    monkeypatch.setattr(neutron, "list_dhcp_agents", lambda region: [
+        {"id": "d1", "host": "hot", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 5, "alive": True,
+         "network_count": 600},
+        {"id": "d2", "host": "cold", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 5, "alive": True,
+         "network_count": 50},
+    ])
+    r = client.get("/tools/dhcp")
+    assert r.status_code == 200
+    assert b"Rebalance recommendations" in r.data
+    # Source agent name appears (mentioned in the rec body and the drill link).
+    assert b"hot" in r.data
+
+
+def test_routers_page_shows_rebalance_recommendation(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    monkeypatch.setattr(neutron, "list_l3_agents", lambda region: [
+        {"id": "l1", "host": "loaded", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 5, "alive": True,
+         "router_count": 600},
+        {"id": "l2", "host": "spare", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 5, "alive": True,
+         "router_count": 50},
+    ])
+    r = client.get("/tools/routers")
+    assert r.status_code == 200
+    assert b"Rebalance recommendations" in r.data
+    assert b"loaded" in r.data
+
+
+def test_dhcp_move_calls_neutron_for_each_network(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    calls = []
+    monkeypatch.setattr(
+        neutron, "move_network",
+        lambda sess, region, nid, src, dst: calls.append((region, nid, src, dst)),
+    )
+    r = client.post("/tools/dhcp/move", data={
+        "region": "dtw", "source_agent": "src", "target_agent": "dst",
+        "network_ids": ["n1", "n2"],
+    })
+    assert r.status_code == 302
+    assert calls == [
+        ("dtw", "n1", "src", "dst"),
+        ("dtw", "n2", "src", "dst"),
+    ]
+
+
 def test_verify_requires_login(client):
     r = client.post("/tools/routers/verify", data={})
     assert r.status_code == 302

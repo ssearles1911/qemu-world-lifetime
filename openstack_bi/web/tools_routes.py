@@ -24,7 +24,7 @@ from ..auth import token_store
 from ..auth.session import current_user, login_required
 from ..config import Region, keystone_db, keystone_region, parse_regions
 from ..db import query
-from ..util import safe_for_each_region
+from ..util import rebalance_recommendations, safe_for_each_region
 
 
 def register(app: Flask) -> None:
@@ -39,6 +39,13 @@ def register(app: Flask) -> None:
     app.add_url_rule(
         "/tools/routers/verify", view_func=routers_verify,
         endpoint="tools_routers_verify", methods=("POST",),
+    )
+    app.add_url_rule(
+        "/tools/dhcp", view_func=dhcp_agents_page, endpoint="tools_dhcp",
+    )
+    app.add_url_rule(
+        "/tools/dhcp/move", view_func=dhcp_move,
+        endpoint="tools_dhcp_move", methods=("POST",),
     )
     app.add_url_rule("/tools/vlans", view_func=vlans, endpoint="tools_vlans")
     app.add_url_rule(
@@ -162,12 +169,15 @@ def routers():
         if selected_agent is None or a["id"] != selected_agent["id"]
     ]
 
+    recommendations = rebalance_recommendations(agents, count_key="router_count")
+
     return render_template(
         "tools/routers.html",
         regions=regions, region=region,
         agents=agents, selected_agent=selected_agent,
         routers=agent_routers, target_agents=target_agents,
         has_token=_keystone_session() is not None,
+        recommendations=recommendations,
         error=error,
     )
 
@@ -687,3 +697,139 @@ def networks_page():
         regions=regions, region=region, networks=nets,
         agents_by_id=agents_by_id, error=error,
     )
+
+
+# --- DHCP-agent maintenance -------------------------------------------------
+
+@login_required
+def dhcp_agents_page():
+    """DHCP agent maintenance: pick an agent and move its networks to
+    a healthy target before taking the network node down.
+
+    Parallel to `routers` (the L3 router tool) — same shape, different
+    OpenStack scheduler (DHCP instead of L3). DHCP and L3 scheduling
+    are independent in Neutron, so draining a network node usually
+    means doing both passes.
+    """
+    regions = _regions()
+    if not regions:
+        flash("No regions are configured.", "error")
+        return render_template(
+            "tools/dhcp.html",
+            regions=[], region=None, agents=[], selected_agent=None,
+            networks=[], target_agents=[], has_token=False, error=None,
+        )
+
+    region_name = request.args.get("region") or regions[0].name
+    region = _resolve_region(region_name)
+    if region is None:
+        flash(f"Unknown region {region_name!r}.", "error")
+        region = regions[0]
+
+    error: Optional[str] = None
+    agents: List[Dict] = []
+    try:
+        agents = neutron.list_dhcp_agents(region)
+    except Exception as exc:  # noqa: BLE001
+        error = f"Could not list DHCP agents for {region.name}: {exc}"
+
+    selected_agent_id = request.args.get("agent") or None
+    selected_agent = next(
+        (a for a in agents if a["id"] == selected_agent_id), None
+    )
+
+    agent_networks: List[Dict] = []
+    if selected_agent is not None and error is None:
+        try:
+            agent_networks = neutron.networks_on_dhcp_agent(
+                region, selected_agent_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = f"Could not list networks on the selected agent: {exc}"
+        else:
+            directory = _project_directory(
+                [n["project_id"] for n in agent_networks]
+            )
+            for n in agent_networks:
+                info = directory.get(n["project_id"], {})
+                n["project_name"] = info.get("name", "")
+
+    # Every other DHCP agent is a candidate target.
+    target_agents = [
+        a for a in agents
+        if selected_agent is None or a["id"] != selected_agent["id"]
+    ]
+
+    recommendations = rebalance_recommendations(agents, count_key="network_count")
+
+    return render_template(
+        "tools/dhcp.html",
+        regions=regions, region=region,
+        agents=agents, selected_agent=selected_agent,
+        networks=agent_networks, target_agents=target_agents,
+        has_token=_keystone_session() is not None,
+        recommendations=recommendations,
+        error=error,
+    )
+
+
+@login_required
+def dhcp_move():
+    """Move the selected networks from the source DHCP agent to the target."""
+    region_name = (request.form.get("region") or "").strip()
+    source = (request.form.get("source_agent") or "").strip()
+    target = (request.form.get("target_agent") or "").strip()
+    network_ids = [n for n in request.form.getlist("network_ids") if n]
+
+    region = _resolve_region(region_name)
+    back = url_for("tools_dhcp", region=region_name, agent=source)
+    if region is None:
+        flash(f"Unknown region {region_name!r}.", "error")
+        return redirect(url_for("tools_dhcp"))
+    if not source or not target:
+        flash("Choose both a source and a target DHCP agent.", "error")
+        return redirect(back)
+    if source == target:
+        flash("The source and target DHCP agents must be different.", "error")
+        return redirect(back)
+    if not network_ids:
+        flash("Select at least one network to move.", "error")
+        return redirect(back)
+
+    ks = _keystone_session()
+    if ks is None:
+        flash(
+            "Sign in with Keystone to move networks — a scoped token is "
+            "required to call the network API.",
+            "error",
+        )
+        return redirect(back)
+
+    moved: List[str] = []
+    failed: List[str] = []
+    for nid in network_ids:
+        try:
+            neutron.move_network(ks, region.name, nid, source, target)
+        except neutron.NeutronError as exc:
+            failed.append(nid)
+            _audit(
+                "dhcp_network_move_failed",
+                f"{nid}: {source} -> {target} ({region.name}): {exc}",
+            )
+            flash(f"Network {nid}: {exc}", "error")
+        else:
+            moved.append(nid)
+            _audit(
+                "dhcp_network_move",
+                f"{nid}: {source} -> {target} ({region.name})",
+            )
+
+    if moved:
+        flash(
+            f"Moved {len(moved)} network(s) to the target DHCP agent. "
+            "Re-open the source agent to confirm it is drained.",
+            "success",
+        )
+    if not moved and not failed:
+        flash("No networks were moved.", "info")
+    return redirect(back)

@@ -145,6 +145,84 @@ def format_region_errors(errors: Sequence[Dict[str, str]]) -> str:
     return "; ".join(f"{e['region']}: {e['error']}" for e in errors)
 
 
+def rebalance_recommendations(
+    agents: Sequence[Dict[str, Any]],
+    count_key: str,
+    *,
+    over_threshold_pct: float = 0.20,
+    over_threshold_min: int = 5,
+) -> List[Dict[str, Any]]:
+    """Suggest per-agent moves to even out scheduler load.
+
+    Shared by the L3-router and DHCP-network tools so an operator can
+    spot a lopsided cluster at a glance before drilling into one to
+    drain it. Each `agents` dict needs `id`, `host`, `alive`,
+    `admin_state_up`, and the integer count field named by
+    `count_key`.
+
+    Only eligible agents (alive + admin_state_up) contribute to the
+    mean and can be suggested targets — pointing the operator at a
+    dead host would just chain the failure.
+
+    An overloaded agent must exceed the mean by more than
+    ``max(over_threshold_pct * mean, over_threshold_min)``; one or
+    two off the mean is not interesting to report. Returns ``[]``
+    when the cluster is already balanced.
+
+    Each recommendation is ``{source_id, source_host, current, mean,
+    excess, targets: [{id, host, count}]}`` where the per-target
+    `count` is how many bindings to shift to that target.
+    """
+    eligible = [a for a in agents if a.get("alive") and a.get("admin_state_up")]
+    if len(eligible) < 2:
+        return []
+    total = sum(a[count_key] for a in eligible)
+    if total == 0:
+        return []
+    mean = total / len(eligible)
+    band = max(over_threshold_pct * mean, over_threshold_min)
+    overloaded = [a for a in eligible if a[count_key] > mean + band]
+    underloaded = sorted(
+        [a for a in eligible if a[count_key] < mean - band],
+        key=lambda a: a[count_key],
+    )
+    if not overloaded or not underloaded:
+        return []
+
+    # Cooperative fill: each underloaded agent's deficit is consumed
+    # across all overloaded sources so we don't double-count capacity.
+    deficits = {a["id"]: int(mean - a[count_key]) for a in underloaded}
+
+    recs: List[Dict[str, Any]] = []
+    for src in sorted(overloaded, key=lambda a: -a[count_key]):
+        excess = int(src[count_key] - mean)
+        targets: List[Dict[str, Any]] = []
+        remaining = excess
+        for tgt in underloaded:
+            available = deficits.get(tgt["id"], 0)
+            if available <= 0:
+                continue
+            take = min(available, remaining)
+            if take > 0:
+                targets.append({
+                    "id": tgt["id"], "host": tgt["host"], "count": take,
+                })
+                deficits[tgt["id"]] -= take
+                remaining -= take
+            if remaining <= 0:
+                break
+        if targets:
+            recs.append({
+                "source_id": src["id"],
+                "source_host": src["host"],
+                "current": src[count_key],
+                "mean": int(mean),
+                "excess": excess,
+                "targets": targets,
+            })
+    return recs
+
+
 def format_bucket_labels(boundaries: Sequence[datetime], granularity: str) -> List[str]:
     """Human labels for each bucket boundary, matched to the granularity."""
     if granularity == "day":

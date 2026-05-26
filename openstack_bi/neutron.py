@@ -34,6 +34,7 @@ AGENT_DOWN_SECONDS = 75
 # `agents.agent_type` value for the L3 agent. DHCP agents are
 # 'DHCP agent', Open vSwitch agents 'Open vSwitch agent', etc.
 L3_AGENT_TYPE = "L3 agent"
+DHCP_AGENT_TYPE = "DHCP agent"
 
 
 # --- DB queries (read; fast path) -------------------------------------------
@@ -125,6 +126,93 @@ def routers_on_l3_agent(region: Region, agent_id: str) -> List[Dict[str, Any]]:
             "gateway_ip": r.get("gateway_ips") or "",
         })
     return routers
+
+
+def list_dhcp_agents(region: Region) -> List[Dict[str, Any]]:
+    """Every DHCP agent in `region` with a derived alive flag and the
+    count of networks currently scheduled to it.
+
+    Companion to `list_l3_agents` — same shape, different `agent_type`
+    filter and binding table (`networkdhcpagentbindings` instead of
+    `routerl3agentbindings`).
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT
+            a.id,
+            a.host,
+            a.admin_state_up,
+            a.availability_zone,
+            TIMESTAMPDIFF(SECOND, a.heartbeat_timestamp, UTC_TIMESTAMP())
+                AS heartbeat_age,
+            (SELECT COUNT(*) FROM networkdhcpagentbindings nb
+             WHERE nb.dhcp_agent_id = a.id) AS network_count
+        FROM agents a
+        WHERE a.agent_type = %s
+        ORDER BY a.host
+        """,
+        (DHCP_AGENT_TYPE,),
+    )
+    agents: List[Dict[str, Any]] = []
+    for r in rows:
+        age = r.get("heartbeat_age")
+        age = int(age) if age is not None else None
+        agents.append({
+            "id": r["id"],
+            "host": r.get("host") or "",
+            "admin_state_up": bool(r.get("admin_state_up")),
+            "availability_zone": r.get("availability_zone") or "",
+            "heartbeat_age": age,
+            "alive": age is not None and age < AGENT_DOWN_SECONDS,
+            "network_count": int(r.get("network_count") or 0),
+        })
+    return agents
+
+
+def networks_on_dhcp_agent(
+    region: Region, agent_id: str
+) -> List[Dict[str, Any]]:
+    """Networks currently scheduled to one DHCP agent.
+
+    Used by the DHCP maintenance tool: the operator picks an agent,
+    sees what it is serving, and reschedules the networks to a healthy
+    target agent before taking the network node down. Segment metadata
+    is included so the operator can recognise familiar networks at a
+    glance.
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT
+            n.id, n.name, n.status, n.admin_state_up, n.project_id,
+            GROUP_CONCAT(DISTINCT ns.network_type
+                         ORDER BY ns.network_type SEPARATOR ', ')
+                         AS network_types,
+            GROUP_CONCAT(DISTINCT ns.segmentation_id
+                         ORDER BY ns.segmentation_id SEPARATOR ', ')
+                         AS segment_ids
+        FROM networkdhcpagentbindings nb
+        JOIN networks n ON n.id = nb.network_id
+        LEFT JOIN networksegments ns ON ns.network_id = n.id
+        WHERE nb.dhcp_agent_id = %s
+        GROUP BY n.id, n.name, n.status, n.admin_state_up, n.project_id
+        ORDER BY n.name, n.id
+        """,
+        (agent_id,),
+    )
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "name": r.get("name") or "(unnamed)",
+            "status": r.get("status") or "",
+            "admin_state_up": bool(r.get("admin_state_up")),
+            "project_id": r.get("project_id") or "",
+            "network_types": r.get("network_types") or "",
+            "segment_ids": r.get("segment_ids") or "",
+        })
+    return out
 
 
 def router_wan_ips(
@@ -563,6 +651,59 @@ def move_router(
         raise NeutronError(
             f"removed from the source agent but could NOT be added to the "
             f"target ({exc}). The router is currently unscheduled — "
+            f"reschedule it manually."
+        )
+
+
+def add_network_to_dhcp_agent(
+    session: Session, region: str, agent_id: str, network_id: str
+) -> None:
+    """Schedule `network_id` onto the DHCP agent `agent_id`."""
+    _request(
+        session, region, "POST",
+        f"/v2.0/agents/{agent_id}/dhcp-networks",
+        json={"network_id": network_id},
+    )
+
+
+def remove_network_from_dhcp_agent(
+    session: Session, region: str, agent_id: str, network_id: str
+) -> None:
+    """Unschedule `network_id` from the DHCP agent `agent_id`."""
+    _request(
+        session, region, "DELETE",
+        f"/v2.0/agents/{agent_id}/dhcp-networks/{network_id}",
+    )
+
+
+def move_network(
+    session: Session,
+    region: str,
+    network_id: str,
+    source_agent_id: str,
+    target_agent_id: str,
+) -> None:
+    """Reschedule a network from one DHCP agent to another.
+
+    Remove-from-source then add-to-target — same model as `move_router`,
+    and the explicit drain pattern operators use during maintenance
+    (preferable to disabling the source agent, which Neutron does *not*
+    auto-reschedule from — only dead agents trigger automatic DHCP
+    failover). A brief DHCP outage during the gap is normally harmless
+    because existing leases keep working, but short lease times or
+    mid-boot PXE hosts can feel it.
+
+    If the add fails after the remove succeeded, the network is left
+    unscheduled — the raised error says so explicitly so the operator
+    knows to reschedule it by hand.
+    """
+    remove_network_from_dhcp_agent(session, region, source_agent_id, network_id)
+    try:
+        add_network_to_dhcp_agent(session, region, target_agent_id, network_id)
+    except NeutronError as exc:
+        raise NeutronError(
+            f"removed from the source agent but could NOT be added to the "
+            f"target ({exc}). The network is currently unscheduled — "
             f"reschedule it manually."
         )
 
