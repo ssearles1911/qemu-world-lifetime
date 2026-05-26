@@ -1,0 +1,219 @@
+{% extends "tools/_layout.html" %}
+{% block tools_body %}
+<h1 class="text-2xl font-semibold mb-2">Networks</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Find a network by name or id, then expand the row to see which
+  DHCP agents and L3 agents host it — the equivalent of
+  <span class="font-mono">openstack network agent list --network &lt;id&gt;</span>.
+</p>
+
+{% if error %}
+  <div class="px-4 py-2 rounded text-sm bg-red-100 text-red-800 border border-red-200 mb-4">{{ error }}</div>
+{% endif %}
+
+{% if regions %}
+<form method="get" class="mb-4 flex items-end gap-3">
+  <label class="block">
+    <span class="text-sm font-medium">Region</span>
+    <select name="region" class="form-input mt-1" onchange="this.form.submit()">
+      {% for r in regions %}
+        <option value="{{ r.name }}"
+                {% if region and r.name == region.name %}selected{% endif %}>
+          {{ r.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit" class="btn btn-primary">Load</button></noscript>
+</form>
+
+<div class="mb-3">
+  <input type="search" id="net-search" class="form-input w-full md:w-1/2"
+         placeholder="Filter — name, id, project, type, segment…"
+         autocomplete="off">
+</div>
+
+<div class="card"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Networks in {{ region.name }}
+    <span class="text-gray-400 font-normal">({{ networks|length }})</span>
+  </h2>
+  {% if networks %}
+  <div class="overflow-x-auto">
+  <table class="data-table" id="net-table">
+    <thead>
+      <tr>
+        <th class="w-6"></th>
+        <th>Name</th>
+        <th>Network ID</th>
+        <th>Project</th>
+        <th>Type</th>
+        <th class="text-right">Segment</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for n in networks %}
+        <tr class="net-row" data-network-id="{{ n.id }}"
+            data-filter="{{ (n.name ~ ' ' ~ n.id ~ ' ' ~ n.project_name ~ ' ' ~ n.network_types ~ ' ' ~ n.segment_ids)|lower }}">
+          <td>
+            <button type="button" class="caret-btn text-secondary"
+                    aria-label="Expand row" aria-expanded="false">▶</button>
+          </td>
+          <td>{{ n.name or '(unnamed)' }}</td>
+          <td class="font-mono text-xs">{{ n.id }}</td>
+          <td>{{ n.project_name or n.project_id or '—' }}</td>
+          <td class="font-mono text-xs">{{ n.network_types or '—' }}</td>
+          <td class="text-right tabular-nums">{{ n.segment_ids or '—' }}</td>
+          <td>
+            {{ n.status or '—' }}
+            {% if not n.admin_state_up %}
+              <span class="text-red-700">(admin down)</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr class="expand-row hidden" data-network-id="{{ n.id }}">
+          <td colspan="7" class="bg-gray-50">
+            <div class="agents-content text-sm"></div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p id="net-empty" class="hidden text-sm text-gray-500 mt-3">
+    No networks match that filter.
+  </p>
+  {% else %}
+    <p class="text-sm text-gray-500">No networks in this region.</p>
+  {% endif %}
+</div></div>
+
+{# Agent bindings pre-fetched by `networks_page` and serialised once
+   here, so the row-expand JS can build only the rows the operator
+   actually opens (instead of forcing Chrome to lay out hundreds of
+   pre-rendered hidden rows). #}
+<script id="agents-data" type="application/json">{{ agents_by_id|tojson }}</script>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  // Type-to-search filter. Hides both the network-row and its paired
+  // expand-row so a hidden network never leaves a stray expansion behind.
+  var input = document.getElementById('net-search');
+  var empty = document.getElementById('net-empty');
+  if (!input) return;
+  var rows = document.querySelectorAll('.net-row');
+  input.addEventListener('input', function () {
+    var q = (input.value || '').trim().toLowerCase();
+    var visible = 0;
+    rows.forEach(function (row) {
+      var match = !q || (row.dataset.filter || '').indexOf(q) !== -1;
+      row.hidden = !match;
+      var pair = document.querySelector(
+        '.expand-row[data-network-id="' + row.dataset.networkId + '"]'
+      );
+      if (pair && !match) {
+        // Close any open expansion when the parent row is filtered out,
+        // and reset the caret so the state is consistent when the
+        // filter clears.
+        pair.classList.add('hidden');
+        var caret = row.querySelector('.caret-btn');
+        if (caret) {
+          caret.textContent = '▶';
+          caret.setAttribute('aria-expanded', 'false');
+        }
+      }
+      if (match) visible++;
+    });
+    if (empty) empty.classList.toggle('hidden', visible > 0);
+  });
+})();
+
+(function () {
+  // Lazy expand: agent bindings come from the embedded JSON blob (the
+  // server pre-fetched everything in two bulk queries on page load),
+  // so there is no HTTP cost — but we only build a row's HTML the
+  // first time it is expanded. That keeps initial DOM small and
+  // avoids the table relayout stall Chrome shows when ~700 expand
+  // rows are all pre-rendered.
+  var dataEl = document.getElementById('agents-data');
+  var AGENTS = dataEl ? JSON.parse(dataEl.textContent || '{}') : {};
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+  function aliveBadge(a) {
+    return a.alive
+      ? '<span class="text-green-700 font-medium">up</span>'
+      : '<span class="text-red-700 font-medium">down</span>';
+  }
+  function ageNote(a) {
+    if (a.heartbeat_age == null) return '';
+    return ' <span class="text-gray-400">(' + a.heartbeat_age + 's ago)</span>';
+  }
+  function adminNote(a) {
+    return a.admin_state_up
+      ? ''
+      : ' <span class="text-red-700">(admin down)</span>';
+  }
+  function renderInto(panel, networkId) {
+    var data = AGENTS[networkId] || { dhcp: [], l3: [] };
+    var parts = [];
+    parts.push('<h4 class="font-semibold mb-1">DHCP agents (' +
+               data.dhcp.length + ')</h4>');
+    if (data.dhcp.length) {
+      parts.push('<ul class="ml-4 mb-3 list-disc">');
+      data.dhcp.forEach(function (a) {
+        parts.push('<li><span class="font-mono">' + esc(a.host) + '</span> — ' +
+                   aliveBadge(a) + ageNote(a) + adminNote(a) + '</li>');
+      });
+      parts.push('</ul>');
+    } else {
+      parts.push('<p class="ml-4 mb-3 text-gray-500">none</p>');
+    }
+    parts.push('<h4 class="font-semibold mb-1">L3 agents (' +
+               data.l3.length + ')</h4>');
+    if (data.l3.length) {
+      parts.push('<ul class="ml-4 list-disc">');
+      data.l3.forEach(function (a) {
+        parts.push('<li>router <span class="font-mono">' +
+                   esc(a.router_name || a.router_id) + '</span> ' +
+                   '<span class="text-xs text-gray-500">(' +
+                   esc(a.interface_role) + ')</span> → ' +
+                   '<span class="font-mono">' + esc(a.agent_host) + '</span> — ' +
+                   aliveBadge(a) + ageNote(a) + adminNote(a) + '</li>');
+      });
+      parts.push('</ul>');
+    } else {
+      parts.push('<p class="ml-4 text-gray-500">none</p>');
+    }
+    panel.innerHTML = parts.join('');
+  }
+
+  document.querySelectorAll('.caret-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var row = btn.closest('tr');
+      if (!row) return;
+      var nid = row.dataset.networkId;
+      var pair = document.querySelector(
+        '.expand-row[data-network-id="' + nid + '"]'
+      );
+      if (!pair) return;
+      var willExpand = pair.classList.contains('hidden');
+      if (willExpand && pair.dataset.rendered !== '1') {
+        renderInto(pair.querySelector('.agents-content'), nid);
+        pair.dataset.rendered = '1';
+      }
+      pair.classList.toggle('hidden');
+      btn.textContent = willExpand ? '▼' : '▶';
+      btn.setAttribute('aria-expanded', willExpand ? 'true' : 'false');
+    });
+  });
+})();
+</script>
+{% endblock %}

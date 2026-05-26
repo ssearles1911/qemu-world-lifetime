@@ -172,6 +172,112 @@ def test_move_all_failed_redirects_to_source_without_verify(client, monkeypatch)
 
 # --- Router reachability verification ---------------------------------------
 
+# --- DHCP-agent tool --------------------------------------------------------
+
+def test_dhcp_page_requires_login(client):
+    r = client.get("/tools/dhcp")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_dhcp_page_lists_agents(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    monkeypatch.setattr(neutron, "list_dhcp_agents", lambda region: [
+        {"id": "d1", "host": "net-1", "admin_state_up": True,
+         "availability_zone": "nova", "heartbeat_age": 5, "alive": True,
+         "network_count": 4},
+    ])
+    r = client.get("/tools/dhcp")
+    assert r.status_code == 200
+    assert b"net-1" in r.data
+    assert b"DHCP agents in" in r.data
+
+
+def test_dhcp_move_requires_keystone_token(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    called = []
+    monkeypatch.setattr(neutron, "move_network", lambda *a, **k: called.append(a))
+    r = client.post("/tools/dhcp/move", data={
+        "region": "dtw", "source_agent": "d1", "target_agent": "d2",
+        "network_ids": ["n1"],
+    })
+    assert r.status_code == 302
+    assert called == []
+
+
+def test_dhcp_move_rejects_same_source_and_target(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    called = []
+    monkeypatch.setattr(neutron, "move_network", lambda *a, **k: called.append(a))
+    r = client.post("/tools/dhcp/move", data={
+        "region": "dtw", "source_agent": "d1", "target_agent": "d1",
+        "network_ids": ["n1"],
+    })
+    assert r.status_code == 302
+    assert called == []
+
+
+def test_dhcp_page_shows_rebalance_recommendation(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    monkeypatch.setattr(neutron, "list_dhcp_agents", lambda region: [
+        {"id": "d1", "host": "hot", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 5, "alive": True,
+         "network_count": 600},
+        {"id": "d2", "host": "cold", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 5, "alive": True,
+         "network_count": 50},
+    ])
+    r = client.get("/tools/dhcp")
+    assert r.status_code == 200
+    assert b"Rebalance recommendations" in r.data
+    # Source agent name appears (mentioned in the rec body and the drill link).
+    assert b"hot" in r.data
+
+
+def test_routers_page_shows_rebalance_recommendation(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    monkeypatch.setattr(neutron, "list_l3_agents", lambda region: [
+        {"id": "l1", "host": "loaded", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 5, "alive": True,
+         "router_count": 600},
+        {"id": "l2", "host": "spare", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 5, "alive": True,
+         "router_count": 50},
+    ])
+    r = client.get("/tools/routers")
+    assert r.status_code == 200
+    assert b"Rebalance recommendations" in r.data
+    assert b"loaded" in r.data
+
+
+def test_dhcp_move_calls_neutron_for_each_network(client, monkeypatch):
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    calls = []
+    monkeypatch.setattr(
+        neutron, "move_network",
+        lambda sess, region, nid, src, dst: calls.append((region, nid, src, dst)),
+    )
+    r = client.post("/tools/dhcp/move", data={
+        "region": "dtw", "source_agent": "src", "target_agent": "dst",
+        "network_ids": ["n1", "n2"],
+    })
+    assert r.status_code == 302
+    assert calls == [
+        ("dtw", "n1", "src", "dst"),
+        ("dtw", "n2", "src", "dst"),
+    ]
+
+
 def test_verify_requires_login(client):
     r = client.post("/tools/routers/verify", data={})
     assert r.status_code == 302
@@ -368,3 +474,105 @@ def test_vlans_create_calls_neutron(client, monkeypatch):
     r = client.post("/tools/vlans/create", data=_vlan_form())
     assert r.status_code == 302
     assert calls == [("dtw", "acme-vlan", "proj-9", "vlan", 815)]
+
+
+# --- Ports in BUILD ---------------------------------------------------------
+
+def test_ports_build_page_requires_login(client):
+    r = client.get("/tools/ports/build")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_ports_build_page_renders(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    monkeypatch.setattr(neutron, "list_build_ports", lambda region: [
+        {"id": "p1", "name": "", "network_id": "n1",
+         "network_name": "private", "mac_address": "fa:16:3e:00:00:01",
+         "admin_state_up": True, "status": "BUILD",
+         "device_owner": "compute:nova", "device_id": "i1",
+         "project_id": "pr1", "created_at": "2026-05-26 12:00:00"},
+    ])
+    r = client.get("/tools/ports/build")
+    assert r.status_code == 200
+    assert b"compute:nova" in r.data
+    assert b"BUILD" in r.data
+    assert b"sortable" in r.data           # column headers are sortable
+    assert b"ports-search" in r.data       # search filter present
+    # Region multi-select checkbox is present and pre-ticked by default.
+    assert b'name="region"' in r.data
+    assert b"checked" in r.data
+
+
+def test_networks_page_requires_login(client):
+    r = client.get("/tools/networks")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_networks_page_renders_with_prefetched_agents(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    monkeypatch.setattr(neutron, "list_networks", lambda region: [
+        {"id": "n1", "name": "acme", "status": "ACTIVE",
+         "admin_state_up": True, "project_id": "p1",
+         "network_types": "vlan", "segment_ids": "815"},
+    ])
+    monkeypatch.setattr(neutron, "dhcp_agents_by_network", lambda region: {
+        "n1": [{"id": "a1", "host": "dhcp01", "admin_state_up": True,
+                "heartbeat_age": 5, "alive": True}],
+    })
+    monkeypatch.setattr(neutron, "l3_agents_by_network", lambda region: {
+        "n1": [{"agent_id": "x1", "agent_host": "nrtr01",
+                "admin_state_up": True, "heartbeat_age": 5, "alive": True,
+                "router_id": "r1", "router_name": "edge-1",
+                "interface_role": "network:router_interface"}],
+    })
+    r = client.get("/tools/networks")
+    assert r.status_code == 200
+    assert b"acme" in r.data
+    assert b"net-search" in r.data       # search input
+    assert b"caret-btn" in r.data        # expand caret
+    assert b"expand-row" in r.data       # paired expansion row
+    # Agent bindings are embedded as a single JSON blob and rendered
+    # lazily by JS on first expand — keeps the initial DOM small.
+    assert b'id="agents-data"' in r.data
+    assert b"dhcp01" in r.data            # present inside the JSON blob
+    assert b"nrtr01" in r.data
+    assert b"edge-1" in r.data
+
+
+def test_ports_build_filters_by_selected_regions(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import config_db, neutron
+
+    # Add a second region so the filter has something to discriminate on.
+    config_db.upsert_region(
+        name="cvg", host="127.0.0.1", port=3306, db_user="r", db_password="",
+    )
+    queried = []
+    monkeypatch.setattr(
+        neutron, "list_build_ports",
+        lambda region: queried.append(region.name) or [],
+    )
+
+    r = client.get("/tools/ports/build?region=cvg")
+    assert r.status_code == 200
+    assert queried == ["cvg"]              # the unchecked region was skipped
+
+
+def test_ports_build_page_shows_region_errors(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    def _explode(region):
+        raise RuntimeError("simulated DB outage")
+
+    monkeypatch.setattr(neutron, "list_build_ports", _explode)
+    r = client.get("/tools/ports/build")
+    assert r.status_code == 200
+    assert b"simulated DB outage" in r.data
+    assert b"dtw" in r.data

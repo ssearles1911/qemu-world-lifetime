@@ -39,6 +39,40 @@
   </div>
 {% endif %}
 
+{# --- Rebalance recommendations (only shown when the cluster is lopsided) --- #}
+{% if recommendations %}
+<div class="card mb-6"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Rebalance recommendations
+    <span class="text-gray-400 font-normal">
+      (target ~{{ recommendations[0].mean }} router(s) per agent)
+    </span>
+  </h2>
+  <ul class="text-sm space-y-3">
+    {% for rec in recommendations %}
+      <li>
+        <span class="font-mono">{{ rec.source_host }}</span>
+        has <span class="font-medium">{{ rec.current }}</span> router(s) —
+        <span class="text-amber-700 font-medium">+{{ rec.excess }} over mean</span>.
+        Suggest moving:
+        <ul class="ml-6 list-disc">
+          {% for t in rec.targets %}
+            <li>
+              <span class="font-medium tabular-nums">{{ t.count }}</span>
+              → <span class="font-mono">{{ t.host }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+        <a class="text-secondary hover:underline text-sm"
+           href="{{ url_for('tools_routers', region=region.name, agent=rec.source_id) }}">
+          → Drill into {{ rec.source_host }} to pick what to move
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+</div></div>
+{% endif %}
+
 {# --- L3 agents in the region --- #}
 <div class="card mb-6"><div class="card-body">
   <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
