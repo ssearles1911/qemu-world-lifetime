@@ -56,10 +56,6 @@ def register(app: Flask) -> None:
         "/tools/networks", view_func=networks_page,
         endpoint="tools_networks",
     )
-    app.add_url_rule(
-        "/tools/networks/<region_name>/<network_id>/agents",
-        view_func=network_agents, endpoint="tools_network_agents",
-    )
 
 
 def _regions() -> List[Region]:
@@ -636,9 +632,11 @@ def ports_build():
 
 @login_required
 def networks_page():
-    """Per-region network list. Each row's caret expands (via AJAX) to
-    show the DHCP + L3 agents hosting that network — i.e., the
-    equivalent of `openstack network agent list --network <id>`.
+    """Per-region network list. Each row's caret expands to show the
+    DHCP + L3 agents hosting that network — equivalent of
+    `openstack network agent list --network <id>`, but with all the
+    agent data pre-fetched in two bulk DB queries on initial page
+    load. Expanding is then a pure DOM toggle — zero round trips.
     """
     regions = _regions()
     if not regions:
@@ -656,8 +654,12 @@ def networks_page():
 
     error: Optional[str] = None
     nets: List[Dict] = []
+    dhcp_by_net: Dict[str, List[Dict]] = {}
+    l3_by_net: Dict[str, List[Dict]] = {}
     try:
         nets = neutron.list_networks(region)
+        dhcp_by_net = neutron.dhcp_agents_by_network(region)
+        l3_by_net = neutron.l3_agents_by_network(region)
     except Exception as exc:  # noqa: BLE001
         error = f"Could not list networks for {region.name}: {exc}"
 
@@ -666,25 +668,22 @@ def networks_page():
         info = directory.get(n["project_id"], {})
         n["project_name"] = info.get("name", "")
 
+    # Embed agent bindings as a single JSON blob keyed by network id —
+    # JS builds the expand-row HTML on first click rather than at page
+    # render. Keeps the initial DOM small enough that toggling one row
+    # doesn't trigger a full-table relayout (the Chrome mouse stall
+    # users hit when ~700 networks' worth of expand content was
+    # pre-rendered).
+    agents_by_id = {
+        n["id"]: {
+            "dhcp": dhcp_by_net.get(n["id"], []),
+            "l3": l3_by_net.get(n["id"], []),
+        }
+        for n in nets
+    }
+
     return render_template(
         "tools/networks.html",
-        regions=regions, region=region, networks=nets, error=error,
+        regions=regions, region=region, networks=nets,
+        agents_by_id=agents_by_id, error=error,
     )
-
-
-@login_required
-def network_agents(region_name: str, network_id: str):
-    """JSON: DHCP + L3 agents hosting `network_id` in `region_name`.
-
-    Backs the row-expand AJAX call on the network list. Read-only and
-    server-side, so no Keystone token is required.
-    """
-    region = _resolve_region(region_name)
-    if region is None:
-        return jsonify(ok=False, error=f"Unknown region {region_name!r}."), 400
-    try:
-        dhcp = neutron.dhcp_agents_for_network(region, network_id)
-        l3 = neutron.l3_agents_for_network(region, network_id)
-    except Exception as exc:  # noqa: BLE001
-        return jsonify(ok=False, error=str(exc)), 502
-    return jsonify(ok=True, dhcp_agents=dhcp, l3_agents=l3)

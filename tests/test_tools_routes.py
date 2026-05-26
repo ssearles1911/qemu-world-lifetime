@@ -406,7 +406,7 @@ def test_networks_page_requires_login(client):
     assert "/login" in r.headers["Location"]
 
 
-def test_networks_page_renders(client, monkeypatch):
+def test_networks_page_renders_with_prefetched_agents(client, monkeypatch):
     _login_keystone(client, with_token=False)
     from openstack_bi import neutron
 
@@ -415,41 +415,28 @@ def test_networks_page_renders(client, monkeypatch):
          "admin_state_up": True, "project_id": "p1",
          "network_types": "vlan", "segment_ids": "815"},
     ])
+    monkeypatch.setattr(neutron, "dhcp_agents_by_network", lambda region: {
+        "n1": [{"id": "a1", "host": "dhcp01", "admin_state_up": True,
+                "heartbeat_age": 5, "alive": True}],
+    })
+    monkeypatch.setattr(neutron, "l3_agents_by_network", lambda region: {
+        "n1": [{"agent_id": "x1", "agent_host": "nrtr01",
+                "admin_state_up": True, "heartbeat_age": 5, "alive": True,
+                "router_id": "r1", "router_name": "edge-1",
+                "interface_role": "network:router_interface"}],
+    })
     r = client.get("/tools/networks")
     assert r.status_code == 200
     assert b"acme" in r.data
     assert b"net-search" in r.data       # search input
     assert b"caret-btn" in r.data        # expand caret
     assert b"expand-row" in r.data       # paired expansion row
-
-
-def test_network_agents_returns_json(client, monkeypatch):
-    _login_keystone(client, with_token=False)
-    from openstack_bi import neutron
-
-    monkeypatch.setattr(neutron, "dhcp_agents_for_network", lambda r, n: [
-        {"id": "a1", "host": "dhcp01", "admin_state_up": True,
-         "heartbeat_age": 5, "alive": True},
-    ])
-    monkeypatch.setattr(neutron, "l3_agents_for_network", lambda r, n: [
-        {"agent_id": "x1", "agent_host": "nrtr01", "admin_state_up": True,
-         "heartbeat_age": 5, "alive": True,
-         "router_id": "r1", "router_name": "edge",
-         "interface_role": "network:router_interface"},
-    ])
-    r = client.get("/tools/networks/dtw/net-1/agents")
-    assert r.status_code == 200
-    d = r.get_json()
-    assert d["ok"] is True
-    assert d["dhcp_agents"][0]["host"] == "dhcp01"
-    assert d["l3_agents"][0]["router_name"] == "edge"
-
-
-def test_network_agents_unknown_region(client):
-    _login_keystone(client, with_token=False)
-    r = client.get("/tools/networks/bogus/net-1/agents")
-    assert r.status_code == 400
-    assert r.get_json()["ok"] is False
+    # Agent bindings are embedded as a single JSON blob and rendered
+    # lazily by JS on first expand — keeps the initial DOM small.
+    assert b'id="agents-data"' in r.data
+    assert b"dhcp01" in r.data            # present inside the JSON blob
+    assert b"nrtr01" in r.data
+    assert b"edge-1" in r.data
 
 
 def test_ports_build_filters_by_selected_regions(client, monkeypatch):

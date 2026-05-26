@@ -74,9 +74,7 @@
         </tr>
         <tr class="expand-row hidden" data-network-id="{{ n.id }}">
           <td colspan="7" class="bg-gray-50">
-            <div class="agents-content text-sm">
-              <span class="text-gray-500">Loading agents…</span>
-            </div>
+            <div class="agents-content text-sm"></div>
           </td>
         </tr>
       {% endfor %}
@@ -90,6 +88,12 @@
     <p class="text-sm text-gray-500">No networks in this region.</p>
   {% endif %}
 </div></div>
+
+{# Agent bindings pre-fetched by `networks_page` and serialised once
+   here, so the row-expand JS can build only the rows the operator
+   actually opens (instead of forcing Chrome to lay out hundreds of
+   pre-rendered hidden rows). #}
+<script id="agents-data" type="application/json">{{ agents_by_id|tojson }}</script>
 {% endif %}
 {% endblock %}
 
@@ -111,7 +115,17 @@
       var pair = document.querySelector(
         '.expand-row[data-network-id="' + row.dataset.networkId + '"]'
       );
-      if (pair && !match) pair.hidden = true;
+      if (pair && !match) {
+        // Close any open expansion when the parent row is filtered out,
+        // and reset the caret so the state is consistent when the
+        // filter clears.
+        pair.classList.add('hidden');
+        var caret = row.querySelector('.caret-btn');
+        if (caret) {
+          caret.textContent = '▶';
+          caret.setAttribute('aria-expanded', 'false');
+        }
+      }
       if (match) visible++;
     });
     if (empty) empty.classList.toggle('hidden', visible > 0);
@@ -119,19 +133,22 @@
 })();
 
 (function () {
-  // Caret expand: GET /tools/networks/<region>/<id>/agents and render
-  // the DHCP + L3 agents in the paired expand row. Cached after the
-  // first expand so re-toggling is instant.
-  var REGION = {{ (region.name if region else '')|tojson }};
-  var BASE = {{ url_for('tools_networks')|tojson }};  // "/tools/networks"
+  // Lazy expand: agent bindings come from the embedded JSON blob (the
+  // server pre-fetched everything in two bulk queries on page load),
+  // so there is no HTTP cost — but we only build a row's HTML the
+  // first time it is expanded. That keeps initial DOM small and
+  // avoids the table relayout stall Chrome shows when ~700 expand
+  // rows are all pre-rendered.
+  var dataEl = document.getElementById('agents-data');
+  var AGENTS = dataEl ? JSON.parse(dataEl.textContent || '{}') : {};
 
-  function escapeHtml(s) {
+  function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
     });
   }
-  function badge(alive) {
-    return alive
+  function aliveBadge(a) {
+    return a.alive
       ? '<span class="text-green-700 font-medium">up</span>'
       : '<span class="text-red-700 font-medium">down</span>';
   }
@@ -144,37 +161,38 @@
       ? ''
       : ' <span class="text-red-700">(admin down)</span>';
   }
-  function renderAgents(panel, data) {
-    var html = '';
-    html += '<h4 class="font-semibold text-sm mb-1">DHCP agents (' +
-            data.dhcp_agents.length + ')</h4>';
-    if (data.dhcp_agents.length) {
-      html += '<ul class="ml-4 mb-3 list-disc">';
-      data.dhcp_agents.forEach(function (a) {
-        html += '<li><span class="font-mono">' + escapeHtml(a.host) +
-                '</span> — ' + badge(a.alive) + ageNote(a) + adminNote(a) + '</li>';
+  function renderInto(panel, networkId) {
+    var data = AGENTS[networkId] || { dhcp: [], l3: [] };
+    var parts = [];
+    parts.push('<h4 class="font-semibold mb-1">DHCP agents (' +
+               data.dhcp.length + ')</h4>');
+    if (data.dhcp.length) {
+      parts.push('<ul class="ml-4 mb-3 list-disc">');
+      data.dhcp.forEach(function (a) {
+        parts.push('<li><span class="font-mono">' + esc(a.host) + '</span> — ' +
+                   aliveBadge(a) + ageNote(a) + adminNote(a) + '</li>');
       });
-      html += '</ul>';
+      parts.push('</ul>');
     } else {
-      html += '<p class="ml-4 mb-3 text-gray-500">none</p>';
+      parts.push('<p class="ml-4 mb-3 text-gray-500">none</p>');
     }
-    html += '<h4 class="font-semibold text-sm mb-1">L3 agents (' +
-            data.l3_agents.length + ')</h4>';
-    if (data.l3_agents.length) {
-      html += '<ul class="ml-4 list-disc">';
-      data.l3_agents.forEach(function (a) {
-        html += '<li>router <span class="font-mono">' +
-                escapeHtml(a.router_name || a.router_id) + '</span> ' +
-                '<span class="text-xs text-gray-500">(' +
-                escapeHtml(a.interface_role) + ')</span> → ' +
-                '<span class="font-mono">' + escapeHtml(a.agent_host) + '</span>' +
-                ' — ' + badge(a.alive) + ageNote(a) + adminNote(a) + '</li>';
+    parts.push('<h4 class="font-semibold mb-1">L3 agents (' +
+               data.l3.length + ')</h4>');
+    if (data.l3.length) {
+      parts.push('<ul class="ml-4 list-disc">');
+      data.l3.forEach(function (a) {
+        parts.push('<li>router <span class="font-mono">' +
+                   esc(a.router_name || a.router_id) + '</span> ' +
+                   '<span class="text-xs text-gray-500">(' +
+                   esc(a.interface_role) + ')</span> → ' +
+                   '<span class="font-mono">' + esc(a.agent_host) + '</span> — ' +
+                   aliveBadge(a) + ageNote(a) + adminNote(a) + '</li>');
       });
-      html += '</ul>';
+      parts.push('</ul>');
     } else {
-      html += '<p class="ml-4 text-gray-500">none</p>';
+      parts.push('<p class="ml-4 text-gray-500">none</p>');
     }
-    panel.innerHTML = html;
+    panel.innerHTML = parts.join('');
   }
 
   document.querySelectorAll('.caret-btn').forEach(function (btn) {
@@ -186,29 +204,14 @@
         '.expand-row[data-network-id="' + nid + '"]'
       );
       if (!pair) return;
-      var nowExpanded = pair.hidden;   // about to become true
-      pair.hidden = !nowExpanded;
-      btn.textContent = nowExpanded ? '▼' : '▶';
-      btn.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
-      if (!nowExpanded || pair.dataset.loaded === '1') return;
-      var panel = pair.querySelector('.agents-content');
-      panel.innerHTML = '<span class="text-gray-500">Loading agents…</span>';
-      var url = BASE + '/' + encodeURIComponent(REGION) +
-                '/' + encodeURIComponent(nid) + '/agents';
-      fetch(url, { headers: { 'Accept': 'application/json' } })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (!d.ok) {
-            panel.innerHTML = '<span class="text-red-700">' +
-              escapeHtml(d.error || 'failed') + '</span>';
-            return;
-          }
-          renderAgents(panel, d);
-          pair.dataset.loaded = '1';
-        })
-        .catch(function () {
-          panel.innerHTML = '<span class="text-red-700">request failed</span>';
-        });
+      var willExpand = pair.classList.contains('hidden');
+      if (willExpand && pair.dataset.rendered !== '1') {
+        renderInto(pair.querySelector('.agents-content'), nid);
+        pair.dataset.rendered = '1';
+      }
+      pair.classList.toggle('hidden');
+      btn.textContent = willExpand ? '▼' : '▶';
+      btn.setAttribute('aria-expanded', willExpand ? 'true' : 'false');
     });
   });
 })();

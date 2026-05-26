@@ -363,28 +363,32 @@ def list_networks(region: Region) -> List[Dict[str, Any]]:
     return out
 
 
-def dhcp_agents_for_network(
-    region: Region, network_id: str
-) -> List[Dict[str, Any]]:
-    """DHCP agents currently scheduled to host `network_id`."""
+def dhcp_agents_by_network(
+    region: Region,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """All DHCP-agent bindings in `region`, grouped by `network_id`.
+
+    One bulk query so the network-list page can pre-render every
+    expand-row server-side, dropping the per-click HTTP round trip the
+    JSON endpoint used to need. Returns `{}` for networks with no
+    bindings (callers index with `.get(net_id, [])`).
+    """
     rows = query(
         region, neutron_db(),
         """
-        SELECT a.id, a.host, a.admin_state_up,
+        SELECT nb.network_id, a.id, a.host, a.admin_state_up,
                TIMESTAMPDIFF(SECOND, a.heartbeat_timestamp, UTC_TIMESTAMP())
                    AS heartbeat_age
         FROM networkdhcpagentbindings nb
         JOIN agents a ON a.id = nb.dhcp_agent_id
-        WHERE nb.network_id = %s
         ORDER BY a.host
         """,
-        (network_id,),
     )
-    out: List[Dict[str, Any]] = []
+    out: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         age = r.get("heartbeat_age")
         age = int(age) if age is not None else None
-        out.append({
+        out.setdefault(r["network_id"], []).append({
             "id": r["id"],
             "host": r.get("host") or "",
             "admin_state_up": bool(r.get("admin_state_up")),
@@ -394,44 +398,48 @@ def dhcp_agents_for_network(
     return out
 
 
-def l3_agents_for_network(
-    region: Region, network_id: str
-) -> List[Dict[str, Any]]:
-    """L3 agents hosting routers that have an interface (or gateway) on
-    `network_id`. One row per (router, agent) so an HA router shows up
-    on each agent it is bound to.
+def l3_agents_by_network(
+    region: Region,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """All L3-router-interface ports in `region` resolved to their
+    (router, agent) bindings, grouped by the port's `network_id`.
+
+    Companion to `dhcp_agents_by_network`: together they let the
+    network-list page pre-render every expand-row with one query each,
+    instead of the previous JSON endpoint per click. One result row per
+    (network, router, agent) — an HA router naturally shows up once per
+    agent it is scheduled to.
     """
     rows = query(
         region, neutron_db(),
         """
-        SELECT a.id              AS agent_id,
-               a.host            AS agent_host,
-               a.admin_state_up  AS agent_admin_state_up,
+        SELECT p.network_id        AS network_id,
+               a.id                AS agent_id,
+               a.host              AS agent_host,
+               a.admin_state_up    AS agent_admin_state_up,
                TIMESTAMPDIFF(SECOND, a.heartbeat_timestamp, UTC_TIMESTAMP())
                    AS heartbeat_age,
-               r.id              AS router_id,
-               r.name            AS router_name,
-               p.device_owner    AS interface_role
+               r.id                AS router_id,
+               r.name              AS router_name,
+               p.device_owner      AS interface_role
         FROM ports p
         JOIN routerl3agentbindings rb ON rb.router_id = p.device_id
         JOIN agents a ON a.id = rb.l3_agent_id
         LEFT JOIN routers r ON r.id = p.device_id
-        WHERE p.network_id = %s
-          AND p.device_owner IN (
-              'network:router_interface',
-              'network:router_interface_distributed',
-              'network:ha_router_replicated_interface',
-              'network:router_gateway'
-          )
+        WHERE p.device_owner IN (
+            'network:router_interface',
+            'network:router_interface_distributed',
+            'network:ha_router_replicated_interface',
+            'network:router_gateway'
+        )
         ORDER BY r.name, a.host
         """,
-        (network_id,),
     )
-    out: List[Dict[str, Any]] = []
+    out: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         age = r.get("heartbeat_age")
         age = int(age) if age is not None else None
-        out.append({
+        out.setdefault(r["network_id"], []).append({
             "agent_id": r["agent_id"],
             "agent_host": r.get("agent_host") or "",
             "admin_state_up": bool(r.get("agent_admin_state_up")),

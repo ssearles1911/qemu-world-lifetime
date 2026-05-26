@@ -280,38 +280,44 @@ def test_list_networks_normalizes(monkeypatch):
     assert nets["n2"]["network_types"] == ""
 
 
-def test_dhcp_agents_for_network_marks_alive(monkeypatch):
+def test_dhcp_agents_by_network_groups_and_marks_alive(monkeypatch):
     monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
     monkeypatch.setattr(neutron, "query", lambda *a, **k: [
-        {"id": "a1", "host": "dhcp01", "admin_state_up": 1,
-         "heartbeat_age": 10},                          # recent -> alive
-        {"id": "a2", "host": "dhcp02", "admin_state_up": 0,
-         "heartbeat_age": 600},                         # stale -> down
-        {"id": "a3", "host": "dhcp03", "admin_state_up": 1,
-         "heartbeat_age": None},                        # never -> down
+        {"network_id": "n1", "id": "a1", "host": "dhcp01",
+         "admin_state_up": 1, "heartbeat_age": 10},   # recent -> alive
+        {"network_id": "n1", "id": "a2", "host": "dhcp02",
+         "admin_state_up": 0, "heartbeat_age": 600},  # stale -> down
+        {"network_id": "n2", "id": "a3", "host": "dhcp03",
+         "admin_state_up": 1, "heartbeat_age": None}, # never -> down
     ])
-    agents = {a["host"]: a for a in neutron.dhcp_agents_for_network(_REGION, "net-1")}
-    assert agents["dhcp01"]["alive"] is True
-    assert agents["dhcp02"]["alive"] is False
-    assert agents["dhcp03"]["alive"] is False
-    assert agents["dhcp02"]["admin_state_up"] is False
+    grouped = neutron.dhcp_agents_by_network(_REGION)
+    assert sorted(grouped.keys()) == ["n1", "n2"]
+    by_host = {a["host"]: a for a in grouped["n1"]}
+    assert by_host["dhcp01"]["alive"] is True
+    assert by_host["dhcp02"]["alive"] is False
+    assert by_host["dhcp02"]["admin_state_up"] is False
+    assert grouped["n2"][0]["alive"] is False        # heartbeat_age None
 
 
-def test_l3_agents_for_network_returns_per_router_agent_pairs(monkeypatch):
+def test_l3_agents_by_network_groups_per_network(monkeypatch):
     monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
     monkeypatch.setattr(neutron, "query", lambda *a, **k: [
-        {"agent_id": "a1", "agent_host": "nrtr01",
+        {"network_id": "n1", "agent_id": "a1", "agent_host": "nrtr01",
          "agent_admin_state_up": 1, "heartbeat_age": 8,
          "router_id": "r1", "router_name": "edge-1",
          "interface_role": "network:router_interface"},
-        {"agent_id": "a2", "agent_host": "nrtr02",
+        {"network_id": "n1", "agent_id": "a2", "agent_host": "nrtr02",
          "agent_admin_state_up": 1, "heartbeat_age": 200,
          "router_id": "r1", "router_name": "edge-1",
          "interface_role": "network:router_interface"},
+        {"network_id": "n2", "agent_id": "a3", "agent_host": "nrtr03",
+         "agent_admin_state_up": 1, "heartbeat_age": 4,
+         "router_id": "r2", "router_name": "edge-2",
+         "interface_role": "network:router_gateway"},
     ])
-    pairs = neutron.l3_agents_for_network(_REGION, "net-1")
-    # One row per (router, agent) — HA-style scheduling shows both.
-    assert len(pairs) == 2
-    assert pairs[0]["agent_host"] == "nrtr01" and pairs[0]["alive"] is True
-    assert pairs[1]["agent_host"] == "nrtr02" and pairs[1]["alive"] is False
-    assert pairs[0]["interface_role"] == "network:router_interface"
+    grouped = neutron.l3_agents_by_network(_REGION)
+    # HA router on net n1 appears once per agent it is bound to.
+    assert len(grouped["n1"]) == 2
+    assert {p["agent_host"] for p in grouped["n1"]} == {"nrtr01", "nrtr02"}
+    assert grouped["n2"][0]["interface_role"] == "network:router_gateway"
+    assert grouped["n2"][0]["alive"] is True
