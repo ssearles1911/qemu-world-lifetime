@@ -277,6 +277,173 @@ def vlan_segment_conflict(
     return {"id": rows[0]["id"], "name": rows[0].get("name") or "(unnamed)"}
 
 
+def list_build_ports(region: Region) -> List[Dict[str, Any]]:
+    """Every Neutron port currently in the BUILD state in `region`.
+
+    A port stuck in BUILD is a common operational signal — broken
+    binding, wedged neutron-server task, DHCP/L2 agent failing to wire
+    the port up — so the tool lists them oldest-first so the most-stuck
+    rows surface at the top.
+
+    The owning project's name is resolved by the caller via Keystone;
+    the `ports` table only has `project_id`.
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT
+            p.id, p.name, p.network_id, p.mac_address,
+            p.admin_state_up, p.status,
+            p.device_owner, p.device_id, p.project_id,
+            n.name              AS network_name,
+            sa.created_at       AS created_at
+        FROM ports p
+        LEFT JOIN networks n            ON n.id = p.network_id
+        LEFT JOIN standardattributes sa ON sa.id = p.standard_attr_id
+        WHERE p.status LIKE %s
+        ORDER BY sa.created_at, p.id
+        """,
+        ("%build%",),
+    )
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "name": r.get("name") or "",
+            "network_id": r.get("network_id") or "",
+            "network_name": r.get("network_name") or "",
+            "mac_address": r.get("mac_address") or "",
+            "admin_state_up": bool(r.get("admin_state_up")),
+            "status": r.get("status") or "",
+            "device_owner": r.get("device_owner") or "",
+            "device_id": r.get("device_id") or "",
+            "project_id": r.get("project_id") or "",
+            "created_at": r.get("created_at"),
+        })
+    return out
+
+
+def list_networks(region: Region) -> List[Dict[str, Any]]:
+    """Every Neutron network in `region`.
+
+    Used by the network-agents tool — the operator searches/picks a
+    network and then expands it to see its DHCP + L3 agents. Includes
+    a comma-joined list of segment types and ids so multi-segment
+    networks show all their segments at a glance.
+
+    Owning project's name is resolved by the caller via Keystone.
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT n.id, n.name, n.status, n.admin_state_up, n.project_id,
+               GROUP_CONCAT(DISTINCT ns.network_type
+                            ORDER BY ns.network_type SEPARATOR ', ')
+                            AS network_types,
+               GROUP_CONCAT(DISTINCT ns.segmentation_id
+                            ORDER BY ns.segmentation_id SEPARATOR ', ')
+                            AS segment_ids
+        FROM networks n
+        LEFT JOIN networksegments ns ON ns.network_id = n.id
+        GROUP BY n.id, n.name, n.status, n.admin_state_up, n.project_id
+        ORDER BY n.name, n.id
+        """,
+    )
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "name": r.get("name") or "",
+            "status": r.get("status") or "",
+            "admin_state_up": bool(r.get("admin_state_up")),
+            "project_id": r.get("project_id") or "",
+            "network_types": r.get("network_types") or "",
+            "segment_ids": r.get("segment_ids") or "",
+        })
+    return out
+
+
+def dhcp_agents_for_network(
+    region: Region, network_id: str
+) -> List[Dict[str, Any]]:
+    """DHCP agents currently scheduled to host `network_id`."""
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT a.id, a.host, a.admin_state_up,
+               TIMESTAMPDIFF(SECOND, a.heartbeat_timestamp, UTC_TIMESTAMP())
+                   AS heartbeat_age
+        FROM networkdhcpagentbindings nb
+        JOIN agents a ON a.id = nb.dhcp_agent_id
+        WHERE nb.network_id = %s
+        ORDER BY a.host
+        """,
+        (network_id,),
+    )
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        age = r.get("heartbeat_age")
+        age = int(age) if age is not None else None
+        out.append({
+            "id": r["id"],
+            "host": r.get("host") or "",
+            "admin_state_up": bool(r.get("admin_state_up")),
+            "heartbeat_age": age,
+            "alive": age is not None and age < AGENT_DOWN_SECONDS,
+        })
+    return out
+
+
+def l3_agents_for_network(
+    region: Region, network_id: str
+) -> List[Dict[str, Any]]:
+    """L3 agents hosting routers that have an interface (or gateway) on
+    `network_id`. One row per (router, agent) so an HA router shows up
+    on each agent it is bound to.
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT a.id              AS agent_id,
+               a.host            AS agent_host,
+               a.admin_state_up  AS agent_admin_state_up,
+               TIMESTAMPDIFF(SECOND, a.heartbeat_timestamp, UTC_TIMESTAMP())
+                   AS heartbeat_age,
+               r.id              AS router_id,
+               r.name            AS router_name,
+               p.device_owner    AS interface_role
+        FROM ports p
+        JOIN routerl3agentbindings rb ON rb.router_id = p.device_id
+        JOIN agents a ON a.id = rb.l3_agent_id
+        LEFT JOIN routers r ON r.id = p.device_id
+        WHERE p.network_id = %s
+          AND p.device_owner IN (
+              'network:router_interface',
+              'network:router_interface_distributed',
+              'network:ha_router_replicated_interface',
+              'network:router_gateway'
+          )
+        ORDER BY r.name, a.host
+        """,
+        (network_id,),
+    )
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        age = r.get("heartbeat_age")
+        age = int(age) if age is not None else None
+        out.append({
+            "agent_id": r["agent_id"],
+            "agent_host": r.get("agent_host") or "",
+            "admin_state_up": bool(r.get("agent_admin_state_up")),
+            "heartbeat_age": age,
+            "alive": age is not None and age < AGENT_DOWN_SECONDS,
+            "router_id": r.get("router_id") or "",
+            "router_name": r.get("router_name") or "",
+            "interface_role": r.get("interface_role") or "",
+        })
+    return out
+
+
 # --- API actions (Keystone-token; state-changing) ---------------------------
 
 class NeutronError(Exception):

@@ -1,0 +1,184 @@
+{% extends "tools/_layout.html" %}
+{% block tools_body %}
+<h1 class="text-2xl font-semibold mb-2">Ports in BUILD</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Every Neutron port currently in the <span class="font-mono">BUILD</span>
+  state across every region — useful for spotting stuck port creations
+  (broken binding, wedged neutron-server task, DHCP/L2 agent issue).
+  Oldest-first so the most-stuck rows surface at the top.
+</p>
+
+{% if all_regions %}
+<form method="get" class="mb-4">
+  <fieldset class="card card-body">
+    <legend class="form-label px-1">Regions</legend>
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {% for r in all_regions %}
+        <label class="inline-flex items-center gap-1 text-sm">
+          <input type="checkbox" name="region" value="{{ r.name }}"
+                 {% if r.name in selected_region_names %}checked{% endif %}>
+          <span class="font-mono">{{ r.name }}</span>
+        </label>
+      {% endfor %}
+      <button type="submit" class="btn btn-primary ml-auto">Apply</button>
+    </div>
+    <p class="text-xs text-gray-500 mt-2">
+      Leave all unchecked to query every configured region.
+    </p>
+  </fieldset>
+</form>
+{% endif %}
+
+{% if region_errors %}
+  <div class="px-4 py-2 rounded text-sm bg-amber-50 text-amber-800 border border-amber-200 mb-4">
+    Could not read one or more regions:
+    <ul class="list-disc list-inside mt-1">
+      {% for e in region_errors %}
+        <li><span class="font-mono">{{ e.region }}</span> — {{ e.error }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+<div class="mb-3">
+  <input type="search" id="ports-search" class="form-input w-full md:w-1/2"
+         placeholder="Filter — region, port, network, device, project, MAC…"
+         autocomplete="off">
+</div>
+
+<div class="card"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Ports in BUILD
+    <span class="text-gray-400 font-normal">({{ rows|length }})</span>
+  </h2>
+  {% if rows %}
+  <div class="overflow-x-auto">
+  <table class="data-table" id="ports-table">
+    <thead>
+      <tr>
+        <th class="sortable" data-numeric="0">
+          <span>Region</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Created (UTC)</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Port</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Network</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Device owner</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Device ID</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>MAC</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Status</span><span class="sort-icon">▲▼</span>
+        </th>
+        <th class="sortable" data-numeric="0">
+          <span>Project</span><span class="sort-icon">▲▼</span>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        <tr class="port-row"
+            data-filter="{{ (r.region ~ ' ' ~ r.id ~ ' ' ~ r.name ~ ' ' ~ r.network_name ~ ' ' ~ r.network_id ~ ' ' ~ r.device_owner ~ ' ' ~ r.device_id ~ ' ' ~ r.mac_address ~ ' ' ~ r.project_name ~ ' ' ~ r.status)|lower }}">
+          <td class="font-mono">{{ r.region }}</td>
+          <td class="whitespace-nowrap">{{ r.created_at or '—' }}</td>
+          <td>
+            {{ r.name or '(unnamed)' }}
+            <div class="text-xs text-gray-400 font-mono">{{ r.id }}</div>
+          </td>
+          <td>
+            {{ r.network_name or '—' }}
+            {% if r.network_id %}
+              <div class="text-xs text-gray-400 font-mono">{{ r.network_id }}</div>
+            {% endif %}
+          </td>
+          <td class="font-mono text-xs">{{ r.device_owner or '—' }}</td>
+          <td class="font-mono text-xs">{{ r.device_id or '—' }}</td>
+          <td class="font-mono text-xs">{{ r.mac_address or '—' }}</td>
+          <td>
+            {{ r.status or '—' }}
+            {% if not r.admin_state_up %}
+              <span class="text-red-700">(admin down)</span>
+            {% endif %}
+          </td>
+          <td>{{ r.project_name or r.project_id or '—' }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p id="ports-empty" class="hidden text-sm text-gray-500 mt-3">
+    No ports match that filter.
+  </p>
+  {% else %}
+    <p class="text-sm text-gray-500">No ports are currently in BUILD.</p>
+  {% endif %}
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  // Type-to-search filter.
+  var input = document.getElementById('ports-search');
+  var empty = document.getElementById('ports-empty');
+  if (!input) return;
+  var rows = document.querySelectorAll('.port-row');
+  input.addEventListener('input', function () {
+    var q = (input.value || '').trim().toLowerCase();
+    var visible = 0;
+    rows.forEach(function (row) {
+      var match = !q || (row.dataset.filter || '').indexOf(q) !== -1;
+      row.hidden = !match;
+      if (match) visible++;
+    });
+    if (empty) empty.classList.toggle('hidden', visible > 0);
+  });
+})();
+
+(function () {
+  // Click-to-sort headers — same pattern as report.html / vlan_list.html.
+  var table = document.getElementById('ports-table');
+  if (!table || !table.tHead) return;
+  var headers = table.tHead.querySelectorAll('th.sortable');
+  headers.forEach(function (th, idx) {
+    th.addEventListener('click', function () {
+      var asc = !th.classList.contains('sort-asc');
+      headers.forEach(function (h) {
+        h.classList.remove('sort-asc', 'sort-desc');
+        h.removeAttribute('aria-sort');
+      });
+      th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+      th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+      var numeric = th.dataset.numeric === '1';
+      var tbody = table.tBodies[0];
+      if (!tbody) return;
+      var rows = Array.prototype.slice.call(tbody.children);
+      rows.sort(function (a, b) {
+        var av = (a.cells[idx] && a.cells[idx].textContent || '').trim();
+        var bv = (b.cells[idx] && b.cells[idx].textContent || '').trim();
+        if (numeric) {
+          var an = parseFloat(av.replace(/[, ]/g, ''));
+          var bn = parseFloat(bv.replace(/[, ]/g, ''));
+          if (isNaN(an) && isNaN(bn)) return 0;
+          if (isNaN(an)) return 1;
+          if (isNaN(bn)) return -1;
+          return asc ? an - bn : bn - an;
+        }
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+})();
+</script>
+{% endblock %}

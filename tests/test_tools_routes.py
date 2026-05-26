@@ -368,3 +368,118 @@ def test_vlans_create_calls_neutron(client, monkeypatch):
     r = client.post("/tools/vlans/create", data=_vlan_form())
     assert r.status_code == 302
     assert calls == [("dtw", "acme-vlan", "proj-9", "vlan", 815)]
+
+
+# --- Ports in BUILD ---------------------------------------------------------
+
+def test_ports_build_page_requires_login(client):
+    r = client.get("/tools/ports/build")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_ports_build_page_renders(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    monkeypatch.setattr(neutron, "list_build_ports", lambda region: [
+        {"id": "p1", "name": "", "network_id": "n1",
+         "network_name": "private", "mac_address": "fa:16:3e:00:00:01",
+         "admin_state_up": True, "status": "BUILD",
+         "device_owner": "compute:nova", "device_id": "i1",
+         "project_id": "pr1", "created_at": "2026-05-26 12:00:00"},
+    ])
+    r = client.get("/tools/ports/build")
+    assert r.status_code == 200
+    assert b"compute:nova" in r.data
+    assert b"BUILD" in r.data
+    assert b"sortable" in r.data           # column headers are sortable
+    assert b"ports-search" in r.data       # search filter present
+    # Region multi-select checkbox is present and pre-ticked by default.
+    assert b'name="region"' in r.data
+    assert b"checked" in r.data
+
+
+def test_networks_page_requires_login(client):
+    r = client.get("/tools/networks")
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_networks_page_renders(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    monkeypatch.setattr(neutron, "list_networks", lambda region: [
+        {"id": "n1", "name": "acme", "status": "ACTIVE",
+         "admin_state_up": True, "project_id": "p1",
+         "network_types": "vlan", "segment_ids": "815"},
+    ])
+    r = client.get("/tools/networks")
+    assert r.status_code == 200
+    assert b"acme" in r.data
+    assert b"net-search" in r.data       # search input
+    assert b"caret-btn" in r.data        # expand caret
+    assert b"expand-row" in r.data       # paired expansion row
+
+
+def test_network_agents_returns_json(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    monkeypatch.setattr(neutron, "dhcp_agents_for_network", lambda r, n: [
+        {"id": "a1", "host": "dhcp01", "admin_state_up": True,
+         "heartbeat_age": 5, "alive": True},
+    ])
+    monkeypatch.setattr(neutron, "l3_agents_for_network", lambda r, n: [
+        {"agent_id": "x1", "agent_host": "nrtr01", "admin_state_up": True,
+         "heartbeat_age": 5, "alive": True,
+         "router_id": "r1", "router_name": "edge",
+         "interface_role": "network:router_interface"},
+    ])
+    r = client.get("/tools/networks/dtw/net-1/agents")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ok"] is True
+    assert d["dhcp_agents"][0]["host"] == "dhcp01"
+    assert d["l3_agents"][0]["router_name"] == "edge"
+
+
+def test_network_agents_unknown_region(client):
+    _login_keystone(client, with_token=False)
+    r = client.get("/tools/networks/bogus/net-1/agents")
+    assert r.status_code == 400
+    assert r.get_json()["ok"] is False
+
+
+def test_ports_build_filters_by_selected_regions(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import config_db, neutron
+
+    # Add a second region so the filter has something to discriminate on.
+    config_db.upsert_region(
+        name="cvg", host="127.0.0.1", port=3306, db_user="r", db_password="",
+    )
+    queried = []
+    monkeypatch.setattr(
+        neutron, "list_build_ports",
+        lambda region: queried.append(region.name) or [],
+    )
+
+    r = client.get("/tools/ports/build?region=cvg")
+    assert r.status_code == 200
+    assert queried == ["cvg"]              # the unchecked region was skipped
+
+
+def test_ports_build_page_shows_region_errors(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+
+    def _explode(region):
+        raise RuntimeError("simulated DB outage")
+
+    monkeypatch.setattr(neutron, "list_build_ports", _explode)
+    r = client.get("/tools/ports/build")
+    assert r.status_code == 200
+    assert b"simulated DB outage" in r.data
+    assert b"dtw" in r.data

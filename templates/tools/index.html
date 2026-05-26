@@ -39,5 +39,25 @@
       </p>
     </div>
   </a>
+  <a href="{{ url_for('tools_ports_build') }}"
+     class="card hover:shadow-md transition-shadow block">
+    <div class="card-body">
+      <h3 class="font-semibold text-lg mb-1">Ports in BUILD</h3>
+      <p class="text-sm text-gray-600">
+        Every Neutron port stuck in <span class="font-mono">BUILD</span>
+        across all regions — quick triage for hung port creations.
+      </p>
+    </div>
+  </a>
+  <a href="{{ url_for('tools_networks') }}"
+     class="card hover:shadow-md transition-shadow block">
+    <div class="card-body">
+      <h3 class="font-semibold text-lg mb-1">Networks</h3>
+      <p class="text-sm text-gray-600">
+        Find a network by name or id, then expand the row to see the
+        DHCP + L3 agents hosting it.
+      </p>
+    </div>
+  </a>
 </div>
 {% endblock %}

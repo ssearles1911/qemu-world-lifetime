@@ -6,10 +6,12 @@
     <h2 class="text-xs uppercase tracking-wide text-gray-500 mb-2">Admin tools</h2>
     <nav class="flex flex-col gap-1 text-sm">
       {% set links = [
-        ('tools_index',     'Overview'),
-        ('tools_routers',   'L3 routers'),
-        ('tools_vlans',     'VLANs'),
-        ('tools_vlan_list', 'VLAN list'),
+        ('tools_index',       'Overview'),
+        ('tools_routers',     'L3 routers'),
+        ('tools_vlans',       'VLANs'),
+        ('tools_vlan_list',   'VLAN list'),
+        ('tools_ports_build', 'Ports in BUILD'),
+        ('tools_networks',    'Networks'),
       ] %}
       {% for endpoint, label in links %}
         <a href="{{ url_for(endpoint) }}"

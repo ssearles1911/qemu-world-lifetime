@@ -232,3 +232,86 @@ def test_vlan_networks_for_project_normalizes(monkeypatch):
     assert nets[0]["name"] == "(unnamed)"
     assert nets[0]["admin_state_up"] is True
     assert nets[0]["segmentation_id"] == 100
+
+
+# --- Ports in BUILD ---------------------------------------------------------
+
+def test_list_build_ports_normalizes(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"id": "p1", "name": None, "network_id": "n1",
+         "mac_address": "fa:16:3e:00:00:01", "admin_state_up": 1,
+         "status": "BUILD", "device_owner": "compute:nova",
+         "device_id": "i1", "project_id": "pr1",
+         "network_name": "private", "created_at": "2026-05-26 12:00:00"},
+        {"id": "p2", "name": "named", "network_id": None, "mac_address": None,
+         "admin_state_up": 0, "status": "BUILD",
+         "device_owner": "", "device_id": "", "project_id": "pr2",
+         "network_name": None, "created_at": None},
+    ])
+    ports = {p["id"]: p for p in neutron.list_build_ports(_REGION)}
+    assert ports["p1"]["status"] == "BUILD"
+    assert ports["p1"]["network_name"] == "private"
+    assert ports["p1"]["admin_state_up"] is True
+    assert ports["p1"]["device_owner"] == "compute:nova"
+    assert ports["p1"]["name"] == ""            # null name preserved as empty
+    assert ports["p1"]["mac_address"] == "fa:16:3e:00:00:01"
+    assert ports["p2"]["name"] == "named"       # non-null name preserved
+    assert ports["p2"]["admin_state_up"] is False
+    assert ports["p2"]["network_id"] == ""      # null network_id preserved
+
+
+# --- Network agents ---------------------------------------------------------
+
+def test_list_networks_normalizes(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"id": "n1", "name": "acme", "status": "ACTIVE", "admin_state_up": 1,
+         "project_id": "p1", "network_types": "vlan",
+         "segment_ids": "815"},
+        {"id": "n2", "name": None, "status": "DOWN", "admin_state_up": 0,
+         "project_id": "p2", "network_types": None, "segment_ids": None},
+    ])
+    nets = {n["id"]: n for n in neutron.list_networks(_REGION)}
+    assert nets["n1"]["network_types"] == "vlan"
+    assert nets["n1"]["segment_ids"] == "815"
+    assert nets["n2"]["name"] == ""
+    assert nets["n2"]["admin_state_up"] is False
+    assert nets["n2"]["network_types"] == ""
+
+
+def test_dhcp_agents_for_network_marks_alive(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"id": "a1", "host": "dhcp01", "admin_state_up": 1,
+         "heartbeat_age": 10},                          # recent -> alive
+        {"id": "a2", "host": "dhcp02", "admin_state_up": 0,
+         "heartbeat_age": 600},                         # stale -> down
+        {"id": "a3", "host": "dhcp03", "admin_state_up": 1,
+         "heartbeat_age": None},                        # never -> down
+    ])
+    agents = {a["host"]: a for a in neutron.dhcp_agents_for_network(_REGION, "net-1")}
+    assert agents["dhcp01"]["alive"] is True
+    assert agents["dhcp02"]["alive"] is False
+    assert agents["dhcp03"]["alive"] is False
+    assert agents["dhcp02"]["admin_state_up"] is False
+
+
+def test_l3_agents_for_network_returns_per_router_agent_pairs(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"agent_id": "a1", "agent_host": "nrtr01",
+         "agent_admin_state_up": 1, "heartbeat_age": 8,
+         "router_id": "r1", "router_name": "edge-1",
+         "interface_role": "network:router_interface"},
+        {"agent_id": "a2", "agent_host": "nrtr02",
+         "agent_admin_state_up": 1, "heartbeat_age": 200,
+         "router_id": "r1", "router_name": "edge-1",
+         "interface_role": "network:router_interface"},
+    ])
+    pairs = neutron.l3_agents_for_network(_REGION, "net-1")
+    # One row per (router, agent) — HA-style scheduling shows both.
+    assert len(pairs) == 2
+    assert pairs[0]["agent_host"] == "nrtr01" and pairs[0]["alive"] is True
+    assert pairs[1]["agent_host"] == "nrtr02" and pairs[1]["alive"] is False
+    assert pairs[0]["interface_role"] == "network:router_interface"

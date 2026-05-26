@@ -24,6 +24,7 @@ from ..auth import token_store
 from ..auth.session import current_user, login_required
 from ..config import Region, keystone_db, keystone_region, parse_regions
 from ..db import query
+from ..util import safe_for_each_region
 
 
 def register(app: Flask) -> None:
@@ -46,6 +47,18 @@ def register(app: Flask) -> None:
     )
     app.add_url_rule(
         "/tools/vlans/list", view_func=vlan_list, endpoint="tools_vlan_list",
+    )
+    app.add_url_rule(
+        "/tools/ports/build", view_func=ports_build,
+        endpoint="tools_ports_build",
+    )
+    app.add_url_rule(
+        "/tools/networks", view_func=networks_page,
+        endpoint="tools_networks",
+    )
+    app.add_url_rule(
+        "/tools/networks/<region_name>/<network_id>/agents",
+        view_func=network_agents, endpoint="tools_network_agents",
     )
 
 
@@ -573,3 +586,105 @@ def vlan_list():
         "tools/vlan_list.html",
         regions=regions, region=region, networks=networks, error=error,
     )
+
+
+@login_required
+def ports_build():
+    """All Neutron ports currently in BUILD across the selected regions.
+
+    The region selector is a multi-select fieldset (same pattern as the
+    reports' multiselect Param) — no `region` query params means "all
+    configured regions". Multi-region fan-out tolerates per-region
+    failure: a dead replica in one region still lets the others render.
+    """
+    all_regions = _regions()
+    if not all_regions:
+        flash("No regions are configured.", "error")
+        return render_template(
+            "tools/ports_build.html",
+            all_regions=[], selected_region_names=[],
+            rows=[], region_errors=[],
+        )
+
+    by_name = {r.name: r for r in all_regions}
+    requested = [n for n in request.args.getlist("region") if n in by_name]
+    selected_regions = [by_name[n] for n in requested] if requested else all_regions
+    selected_region_names = [r.name for r in selected_regions]
+
+    def _collect(region: Region):
+        return neutron.list_build_ports(region)
+
+    results, region_errors = safe_for_each_region(selected_regions, _collect)
+    rows: List[Dict] = []
+    for region, region_rows in results:
+        for r in region_rows:
+            r["region"] = region.name
+            rows.append(r)
+
+    directory = _project_directory([r["project_id"] for r in rows])
+    for r in rows:
+        info = directory.get(r["project_id"], {})
+        r["project_name"] = info.get("name", "")
+
+    return render_template(
+        "tools/ports_build.html",
+        all_regions=all_regions,
+        selected_region_names=selected_region_names,
+        rows=rows, region_errors=region_errors,
+    )
+
+
+@login_required
+def networks_page():
+    """Per-region network list. Each row's caret expands (via AJAX) to
+    show the DHCP + L3 agents hosting that network — i.e., the
+    equivalent of `openstack network agent list --network <id>`.
+    """
+    regions = _regions()
+    if not regions:
+        flash("No regions are configured.", "error")
+        return render_template(
+            "tools/networks.html",
+            regions=[], region=None, networks=[], error=None,
+        )
+
+    region_name = request.args.get("region") or regions[0].name
+    region = _resolve_region(region_name)
+    if region is None:
+        flash(f"Unknown region {region_name!r}.", "error")
+        region = regions[0]
+
+    error: Optional[str] = None
+    nets: List[Dict] = []
+    try:
+        nets = neutron.list_networks(region)
+    except Exception as exc:  # noqa: BLE001
+        error = f"Could not list networks for {region.name}: {exc}"
+
+    directory = _project_directory([n["project_id"] for n in nets])
+    for n in nets:
+        info = directory.get(n["project_id"], {})
+        n["project_name"] = info.get("name", "")
+
+    return render_template(
+        "tools/networks.html",
+        regions=regions, region=region, networks=nets, error=error,
+    )
+
+
+@login_required
+def network_agents(region_name: str, network_id: str):
+    """JSON: DHCP + L3 agents hosting `network_id` in `region_name`.
+
+    Backs the row-expand AJAX call on the network list. Read-only and
+    server-side, so no Keystone token is required.
+    """
+    region = _resolve_region(region_name)
+    if region is None:
+        return jsonify(ok=False, error=f"Unknown region {region_name!r}."), 400
+    try:
+        dhcp = neutron.dhcp_agents_for_network(region, network_id)
+        l3 = neutron.l3_agents_for_network(region, network_id)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify(ok=False, error=str(exc)), 502
+    return jsonify(ok=True, dhcp_agents=dhcp, l3_agents=l3)
