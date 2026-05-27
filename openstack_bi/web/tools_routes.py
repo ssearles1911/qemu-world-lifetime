@@ -47,6 +47,10 @@ def register(app: Flask) -> None:
         "/tools/dhcp/move", view_func=dhcp_move,
         endpoint="tools_dhcp_move", methods=("POST",),
     )
+    app.add_url_rule(
+        "/tools/dhcp/redundancy", view_func=dhcp_redundancy_page,
+        endpoint="tools_dhcp_redundancy",
+    )
     app.add_url_rule("/tools/vlans", view_func=vlans, endpoint="tools_vlans")
     app.add_url_rule(
         "/tools/vlans/create", view_func=vlans_create,
@@ -744,6 +748,11 @@ def dhcp_agents_page():
             agent_networks = neutron.networks_on_dhcp_agent(
                 region, selected_agent_id,
             )
+            # Bulk bindings lookup so each row can show where the
+            # network's *other* DHCP bindings live — operator picks a
+            # target without accidentally putting both bindings on
+            # the same physical host.
+            bindings_index = neutron.dhcp_bindings_index(region)
         except Exception as exc:  # noqa: BLE001
             error = f"Could not list networks on the selected agent: {exc}"
         else:
@@ -753,6 +762,12 @@ def dhcp_agents_page():
             for n in agent_networks:
                 info = directory.get(n["project_id"], {})
                 n["project_name"] = info.get("name", "")
+                others = [
+                    b for b in bindings_index.get(n["id"], [])
+                    if b["agent_id"] != selected_agent_id
+                ]
+                n["other_bindings"] = others
+                n["other_hosts"] = ",".join(b["host"] for b in others if b["host"])
 
     # Every other DHCP agent is a candidate target.
     target_agents = [
@@ -805,6 +820,25 @@ def dhcp_move():
         )
         return redirect(back)
 
+    # Warn-and-confirm: refuse moves that would land any selected
+    # network co-located with its other DHCP binding unless the
+    # operator explicitly confirms via the form's `confirmed=1`
+    # checkbox. The client-side JS sets that field when the operator
+    # ticks the "Confirm anyway" box; this server check is the
+    # authoritative gate (works even without JS).
+    confirmed = (request.form.get("confirmed") or "").strip() == "1"
+    if not confirmed:
+        collisions = _dhcp_collision_count(region, source, target, network_ids)
+        if collisions:
+            flash(
+                f"{collisions} of {len(network_ids)} selected network(s) would "
+                "end up co-located with their other DHCP binding on the "
+                "target host. Tick 'Confirm anyway' if this is intentional, "
+                "then resubmit.",
+                "error",
+            )
+            return redirect(back)
+
     moved: List[str] = []
     failed: List[str] = []
     for nid in network_ids:
@@ -833,3 +867,86 @@ def dhcp_move():
     if not moved and not failed:
         flash("No networks were moved.", "info")
     return redirect(back)
+
+
+def _dhcp_collision_count(
+    region: Region,
+    source_agent_id: str,
+    target_agent_id: str,
+    network_ids: List[str],
+) -> int:
+    """How many of `network_ids` already have a DHCP binding on the
+    target agent's host? Best-effort: any DB error returns 0 so a
+    Neutron-DB blip doesn't turn into a hard block on legitimate moves.
+    """
+    try:
+        agents = neutron.list_dhcp_agents(region)
+    except Exception:  # noqa: BLE001
+        return 0
+    by_id = {a["id"]: a for a in agents}
+    target = by_id.get(target_agent_id)
+    if not target:
+        return 0
+    target_host = target.get("host") or ""
+    if not target_host:
+        return 0
+    try:
+        idx = neutron.dhcp_bindings_index(region)
+    except Exception:  # noqa: BLE001
+        return 0
+    count = 0
+    for nid in network_ids:
+        other_hosts = {
+            b["host"] for b in idx.get(nid, [])
+            if b["agent_id"] != source_agent_id and b.get("host")
+        }
+        if target_host in other_hosts:
+            count += 1
+    return count
+
+
+@login_required
+def dhcp_redundancy_page():
+    """DHCP redundancy audit — surfaces networks whose DHCP bindings
+    are co-located on a single host. Companion to the DHCP move tool;
+    safe to read any time.
+    """
+    regions = _regions()
+    if not regions:
+        flash("No regions are configured.", "error")
+        return render_template(
+            "tools/dhcp_redundancy.html",
+            regions=[], region=None, networks=[], summary={},
+            error=None,
+        )
+
+    region_name = request.args.get("region") or regions[0].name
+    region = _resolve_region(region_name)
+    if region is None:
+        flash(f"Unknown region {region_name!r}.", "error")
+        region = regions[0]
+
+    error: Optional[str] = None
+    rows: List[Dict] = []
+    try:
+        rows = neutron.dhcp_redundancy(region)
+    except Exception as exc:  # noqa: BLE001
+        error = f"Could not list DHCP redundancy for {region.name}: {exc}"
+
+    directory = _project_directory([r["project_id"] for r in rows])
+    for r in rows:
+        info = directory.get(r["project_id"], {})
+        r["project_name"] = info.get("name", "")
+
+    summary = {
+        "colocated": sum(1 for r in rows if r["status"] == "colocated"),
+        "single":    sum(1 for r in rows if r["status"] == "single"),
+        "redundant": sum(1 for r in rows if r["status"] == "redundant"),
+        "total":     len(rows),
+    }
+
+    return render_template(
+        "tools/dhcp_redundancy.html",
+        regions=regions, region=region, networks=rows,
+        summary=summary, error=error,
+    )

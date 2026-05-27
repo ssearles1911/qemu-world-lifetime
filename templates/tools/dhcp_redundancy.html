@@ -1,0 +1,171 @@
+{% extends "tools/_layout.html" %}
+{% block tools_body %}
+<h1 class="text-2xl font-semibold mb-2">DHCP redundancy</h1>
+<p class="text-sm text-gray-600 mb-4">
+  Per-network DHCP-binding audit. A network is
+  <span class="font-medium">co-located</span> when its two-or-more
+  DHCP bindings all run on the same physical host — losing that host
+  loses DHCP for the network, even though the binding count looks
+  redundant. Surfacing them here, and in the move tool's
+  "Other bindings" column, lets you spread bindings across hosts
+  before they bite you.
+</p>
+
+{% if error %}
+  <div class="px-4 py-2 rounded text-sm bg-red-100 text-red-800 border border-red-200 mb-4">
+    {{ error }}
+  </div>
+{% endif %}
+
+{% if regions %}
+<form method="get" class="mb-4 flex items-end gap-3">
+  <label class="block">
+    <span class="text-sm font-medium">Region</span>
+    <select name="region" class="form-input mt-1" onchange="this.form.submit()">
+      {% for r in regions %}
+        <option value="{{ r.name }}"
+                {% if region and r.name == region.name %}selected{% endif %}>
+          {{ r.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit" class="btn btn-primary">Load</button></noscript>
+</form>
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+  <div class="metric-tile card card-body anomaly-tile-critical">
+    <div class="stat-label">Co-located</div>
+    <div class="stat-value tabular-nums">{{ summary.colocated }}</div>
+    <div class="metric-delta">Redundancy lost — fix soon</div>
+  </div>
+  <div class="metric-tile card card-body anomaly-tile-warning">
+    <div class="stat-label">Single binding</div>
+    <div class="stat-value tabular-nums">{{ summary.single }}</div>
+    <div class="metric-delta">No redundancy by design</div>
+  </div>
+  <div class="metric-tile card card-body">
+    <div class="stat-label">Redundant</div>
+    <div class="stat-value tabular-nums">{{ summary.redundant }}</div>
+    <div class="metric-delta">Healthy — bindings on distinct hosts</div>
+  </div>
+  <div class="metric-tile card card-body">
+    <div class="stat-label">Total networks</div>
+    <div class="stat-value tabular-nums">{{ summary.total }}</div>
+    <div class="metric-delta">With at least one DHCP binding</div>
+  </div>
+</div>
+
+<div class="mb-3">
+  <input type="search" id="dhcp-search" class="form-input w-full md:w-1/2"
+         placeholder="Filter — network, project, host…"
+         autocomplete="off">
+</div>
+
+<div class="card"><div class="card-body">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Networks in {{ region.name }}
+    <span class="text-gray-400 font-normal">({{ summary.total }})</span>
+  </h2>
+  {% if networks %}
+  <div class="overflow-x-auto">
+  <table class="data-table" id="dhcp-table">
+    <thead>
+      <tr>
+        <th class="sortable" data-numeric="0"><span>Status</span><span class="sort-icon">▲▼</span></th>
+        <th class="sortable" data-numeric="0"><span>Network</span><span class="sort-icon">▲▼</span></th>
+        <th class="sortable" data-numeric="0"><span>Project</span><span class="sort-icon">▲▼</span></th>
+        <th class="sortable text-right" data-numeric="1"><span>Bindings</span><span class="sort-icon">▲▼</span></th>
+        <th class="sortable" data-numeric="0"><span>Hosts</span><span class="sort-icon">▲▼</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for n in networks %}
+        <tr class="dhcp-row"
+            data-filter="{{ (n.name ~ ' ' ~ n.id ~ ' ' ~ n.project_name ~ ' ' ~ ' '.join(n.hosts))|lower }}">
+          <td>
+            {% if n.status == 'colocated' %}
+              <span class="text-red-700 font-medium">⚠ co-located</span>
+            {% elif n.status == 'single' %}
+              <span class="text-amber-700">single bind</span>
+            {% else %}
+              <span class="text-green-700">redundant</span>
+            {% endif %}
+          </td>
+          <td>
+            {{ n.name }}
+            <div class="text-xs text-gray-400 font-mono">{{ n.id }}</div>
+          </td>
+          <td>{{ n.project_name or n.project_id or '—' }}</td>
+          <td class="text-right tabular-nums">{{ n.hosts|length }}</td>
+          <td class="font-mono text-xs">{{ n.hosts|join(', ') }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p id="dhcp-empty" class="hidden text-sm text-gray-500 mt-3">
+    No networks match that filter.
+  </p>
+  {% else %}
+    <p class="text-sm text-gray-500">No DHCP bindings in this region.</p>
+  {% endif %}
+</div></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var input = document.getElementById('dhcp-search');
+  var empty = document.getElementById('dhcp-empty');
+  if (!input) return;
+  var rows = document.querySelectorAll('.dhcp-row');
+  input.addEventListener('input', function () {
+    var q = (input.value || '').trim().toLowerCase();
+    var visible = 0;
+    rows.forEach(function (row) {
+      var match = !q || (row.dataset.filter || '').indexOf(q) !== -1;
+      row.hidden = !match;
+      if (match) visible++;
+    });
+    if (empty) empty.classList.toggle('hidden', visible > 0);
+  });
+})();
+
+(function () {
+  var table = document.getElementById('dhcp-table');
+  if (!table || !table.tHead) return;
+  var headers = table.tHead.querySelectorAll('th.sortable');
+  headers.forEach(function (th, idx) {
+    th.addEventListener('click', function () {
+      var asc = !th.classList.contains('sort-asc');
+      headers.forEach(function (h) {
+        h.classList.remove('sort-asc', 'sort-desc');
+        h.removeAttribute('aria-sort');
+      });
+      th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+      th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+      var numeric = th.dataset.numeric === '1';
+      var tbody = table.tBodies[0];
+      if (!tbody) return;
+      var rows = Array.prototype.slice.call(tbody.children);
+      rows.sort(function (a, b) {
+        var av = (a.cells[idx] && a.cells[idx].textContent || '').trim();
+        var bv = (b.cells[idx] && b.cells[idx].textContent || '').trim();
+        if (numeric) {
+          var an = parseFloat(av.replace(/[, ]/g, ''));
+          var bn = parseFloat(bv.replace(/[, ]/g, ''));
+          if (isNaN(an) && isNaN(bn)) return 0;
+          if (isNaN(an)) return 1;
+          if (isNaN(bn)) return -1;
+          return asc ? an - bn : bn - an;
+        }
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+})();
+</script>
+{% endblock %}
