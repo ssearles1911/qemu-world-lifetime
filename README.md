@@ -13,6 +13,46 @@ architecture so new reports plug in without touching the CLI or web UI:
   setup wizard, and admin pages. Charts render in-browser via Chart.js and
   are embedded as PNGs in the Excel export.
 
+## Cloud health dashboard
+
+`/dashboard` is the new landing page and the at-a-glance status surface
+for the whole cloud. Five zones top-to-bottom:
+
+1. **Anomalies** — counters that should be zero (instances/ports/
+   volumes/snapshots/routers in `ERROR`, ports in `BUILD`, missed
+   autobackup runs). Hidden behind a single ✓ banner when everything
+   is clean — no wall of green tiles.
+2. **Cloud-wide totals** — 9 tiles with the headline numbers, a
+   `±N vs yesterday` delta, and a per-tile trend sparkline.
+3. **Daily autobackups** — today's count cloud-wide and per region,
+   plus a 30-day adherence strip so a missed run is obvious.
+4. **Trends** — four Chart.js charts: compute footprint, network
+   port states, storage growth, daily autobackup runs.
+5. **Per-region breakdown** — DTW vs CVG vs Total for every
+   per-region metric, with a sparkline column.
+
+Data layer: an in-process daemon thread runs the collector **every 15
+minutes** (overridable via `OPSBI_COLLECTOR_INTERVAL_MINUTES`). It
+reads counts off the regional MariaDB replicas and writes them into
+`dashboard_metric_history` — long-format, one row per
+`(snapshot_date, region, metric)`. Each 15-minute pass overwrites
+today's row with the latest reading via `INSERT OR REPLACE`, so the
+trend layer stays daily-granular while the dashboard's "current"
+tiles stay near-live. The collector also fires once at app boot so a
+fresh deploy is not blank for one full interval. The **⟳ Refresh**
+button on the dashboard re-runs the collector on demand. `opsbi
+snapshot-metrics` remains available for manual / ad-hoc runs. The
+dashboard page reads exclusively from the SQLite history table, so
+page loads stay sub-second.
+
+Set `OPSBI_DISABLE_SCHEDULER=1` if you'd rather drive the collector
+from an external scheduler (cron, systemd timer, etc.). Region toggle
+is a segmented control (`All` / DTW / CVG); range chips are 7d /
+30d / 90d / 1y.
+
+Add a metric: one row in `openstack_bi/dashboard_metrics.METRIC_DEFS`.
+No migrations.
+
 ## Reports
 
 | ID | Category | Purpose |
@@ -47,7 +87,8 @@ the same model as the per-instance Nova actions.
 | Tool | Purpose |
 | --- | --- |
 | L3 routers | Reschedule Neutron virtual routers between L3 agents. Pick a region, open the agent you're draining, select its routers, and move them to a healthy target agent — used to clear a network node before maintenance. Each router is removed from the source agent, then added to the target (safe for legacy, HA, and DVR routers). After a move the target page auto-pings the routers' WAN (gateway) IPs — also available any time via a **Verify reachability** button — so the technician can confirm the batch is still reachable. When the cluster is lopsided, a **Rebalance recommendations** panel suggests concrete moves to even out per-agent load. |
-| DHCP networks | Reschedule networks between DHCP agents — the companion drain for the L3 router tool when decommissioning a network node, since DHCP and L3 scheduling are independent in Neutron. Pick a region, open the DHCP agent you're draining, select its networks, pick a healthy target, move. Each network is removed from the source agent and then added to the target; the brief DHCP outage in the gap is normally harmless because existing leases keep working. Includes the same **Rebalance recommendations** panel as the L3 router tool — overloaded agents and a per-target distribution that would bring the cluster within 20 % of the mean. |
+| DHCP networks | Reschedule networks between DHCP agents — the companion drain for the L3 router tool when decommissioning a network node, since DHCP and L3 scheduling are independent in Neutron. Pick a region, open the DHCP agent you're draining, select its networks, pick a healthy target, move. Each network is removed from the source agent and then added to the target; the brief DHCP outage in the gap is normally harmless because existing leases keep working. Includes the same **Rebalance recommendations** panel as the L3 router tool. Each network row shows its **Other bindings** (which host(s) the network's *other* DHCP agents run on); a live collision counter warns when the chosen target would land a network co-located with its existing binding, and a server-enforced **Confirm anyway** checkbox blocks the move until the operator opts in. |
+| DHCP redundancy | Read-only audit of every network with a DHCP binding, classified as `co-located` (two-plus bindings all on one host — silently lost redundancy), `single` (one binding by design or oversight), or `redundant` (bindings on distinct hosts). Sortable / searchable; useful any time, not just during maintenance. |
 | VLANs | Create a provider VLAN network owned by a target project. The admin picks the project, network name, physnet, and VLAN ID; the network is created `vlan`-typed and project-owned. No subnet is created — the project's own users add that. A pre-submit check flags a VLAN already in use on that physnet. |
 | VLAN list | Read-only, region-wide list of every VLAN network — network name, network id, owning project + domain, VLAN id, physnet, and state. Type-to-search filters the table. Useful for an at-a-glance inventory of which tenant owns which VLAN. |
 | Ports in BUILD | Every Neutron port currently in the `BUILD` state across the selected regions — port id, network, device owner / id, MAC, project, region, created-at. Oldest first; type-to-search filter; sortable headers; region multi-select at the top. Useful for spotting stuck port creations from broken bindings or wedged neutron-server tasks. |

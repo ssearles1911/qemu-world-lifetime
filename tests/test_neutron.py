@@ -156,6 +156,40 @@ def test_list_dhcp_agents_marks_alive(monkeypatch):
     assert agents["d1"]["network_count"] == 17
 
 
+def test_dhcp_bindings_index_groups_by_network(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        {"network_id": "n1", "agent_id": "a1", "host": "nrtr05"},
+        {"network_id": "n1", "agent_id": "a2", "host": "nrtr07"},
+        {"network_id": "n2", "agent_id": "a3", "host": "nrtr05"},
+    ])
+    idx = neutron.dhcp_bindings_index(_REGION)
+    assert sorted(idx.keys()) == ["n1", "n2"]
+    assert len(idx["n1"]) == 2
+    assert {b["host"] for b in idx["n1"]} == {"nrtr05", "nrtr07"}
+
+
+def test_dhcp_redundancy_classifies_colocated_single_redundant(monkeypatch):
+    monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
+    monkeypatch.setattr(neutron, "query", lambda *a, **k: [
+        # colo-net: two bindings, same host -> colocated.
+        {"id": "colo-net", "name": "colo", "project_id": "p1", "host": "nrtr05"},
+        {"id": "colo-net", "name": "colo", "project_id": "p1", "host": "nrtr05"},
+        # solo-net: one binding -> single.
+        {"id": "solo-net", "name": "solo", "project_id": "p2", "host": "nrtr05"},
+        # good-net: two bindings, different hosts -> redundant.
+        {"id": "good-net", "name": "good", "project_id": "p3", "host": "nrtr05"},
+        {"id": "good-net", "name": "good", "project_id": "p3", "host": "nrtr07"},
+    ])
+    rows = neutron.dhcp_redundancy(_REGION)
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["colo-net"]["status"] == "colocated"
+    assert by_id["solo-net"]["status"] == "single"
+    assert by_id["good-net"]["status"] == "redundant"
+    # Severity ordering: colocated first.
+    assert rows[0]["status"] == "colocated"
+
+
 def test_networks_on_dhcp_agent_normalizes(monkeypatch):
     monkeypatch.setattr(neutron, "neutron_db", lambda: "neutron")
     monkeypatch.setattr(neutron, "query", lambda *a, **k: [

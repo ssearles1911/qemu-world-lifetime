@@ -136,18 +136,22 @@
     Networks on {{ selected_agent.host }}
   </h2>
   {% if networks %}
-  <form method="post" action="{{ url_for('tools_dhcp_move') }}">
+  <form method="post" action="{{ url_for('tools_dhcp_move') }}" id="dhcp-move-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="region" value="{{ region.name }}">
     <input type="hidden" name="source_agent" value="{{ selected_agent.id }}">
+    {# The JS flips this to "1" when the operator ticks the
+       "Confirm anyway" checkbox below. The server enforces the same
+       gate independently. #}
+    <input type="hidden" name="confirmed" id="confirmed-flag" value="0">
 
     <div class="flex flex-wrap items-end gap-3 mb-4">
       <label class="block">
         <span class="text-sm font-medium">Target DHCP agent</span>
-        <select name="target_agent" required class="form-input mt-1">
-          <option value="">— choose a target —</option>
+        <select name="target_agent" id="target-agent" required class="form-input mt-1">
+          <option value="" data-host="">— choose a target —</option>
           {% for a in target_agents %}
-            <option value="{{ a.id }}">
+            <option value="{{ a.id }}" data-host="{{ a.host }}">
               {{ a.host }} —
               {{ 'up' if a.alive else 'down' }}{% if not a.admin_state_up %}, disabled{% endif %},
               {{ a.network_count }} network(s)
@@ -155,10 +159,22 @@
           {% endfor %}
         </select>
       </label>
-      <button type="submit" class="btn btn-primary"
+      <button type="submit" id="move-submit" class="btn btn-primary"
               {% if not has_token %}disabled title="Sign in with Keystone to move networks"{% endif %}>
         Move selected networks
       </button>
+    </div>
+
+    <div id="collision-banner"
+         class="hidden mb-4 px-4 py-3 rounded border border-amber-200 bg-amber-50 text-amber-800 text-sm">
+      ⚠ <span id="collision-count">0</span> of selected network(s) already
+      have a DHCP binding on <span class="font-mono" id="collision-host"></span>
+      — moving here would put both bindings on the same host and silently
+      lose redundancy.
+      <label class="block mt-2">
+        <input type="checkbox" id="collision-confirm" class="form-checkbox mr-1">
+        Confirm anyway (I understand the redundancy trade-off)
+      </label>
     </div>
 
     <div class="overflow-x-auto">
@@ -168,6 +184,7 @@
           <th class="py-1 pr-3"><input type="checkbox" id="check-all" class="form-checkbox"></th>
           <th class="py-1 pr-4">Network</th>
           <th class="py-1 pr-4">Project</th>
+          <th class="py-1 pr-4">Other bindings</th>
           <th class="py-1 pr-4">Type</th>
           <th class="py-1 pr-4 text-right">Segment</th>
           <th class="py-1 pr-4">Status</th>
@@ -175,16 +192,24 @@
       </thead>
       <tbody>
         {% for n in networks %}
-          <tr class="border-b">
+          <tr class="border-b network-row" data-other-hosts="{{ n.other_hosts }}">
             <td class="py-1 pr-3">
               <input type="checkbox" name="network_ids" value="{{ n.id }}"
-                     class="form-checkbox network-check">
+                     class="form-checkbox network-check"
+                     data-other-hosts="{{ n.other_hosts }}">
             </td>
             <td class="py-1 pr-4">
               {{ n.name }}
               <div class="text-xs text-gray-400 font-mono">{{ n.id }}</div>
             </td>
             <td class="py-1 pr-4">{{ n.project_name or n.project_id or '—' }}</td>
+            <td class="py-1 pr-4 font-mono text-xs other-bindings-cell">
+              {% if n.other_bindings %}
+                {{ n.other_bindings | map(attribute='host') | join(', ') }}
+              {% else %}
+                <span class="text-gray-400">single binding</span>
+              {% endif %}
+            </td>
             <td class="py-1 pr-4 font-mono text-xs">{{ n.network_types or '—' }}</td>
             <td class="py-1 pr-4 text-right tabular-nums">{{ n.segment_ids or '—' }}</td>
             <td class="py-1 pr-4">
@@ -212,13 +237,83 @@
 {% block scripts %}
 <script>
 (function () {
+  // check-all → set every row checkbox AND nudge the collision counter.
   var all = document.getElementById('check-all');
   if (!all) return;
   all.addEventListener('change', function () {
     document.querySelectorAll('.network-check').forEach(function (c) {
       c.checked = all.checked;
     });
+    if (window.__dhcpRecomputeCollisions) window.__dhcpRecomputeCollisions();
   });
+})();
+
+(function () {
+  // Collision counter + warn-and-confirm gate. The server also enforces
+  // the gate (so a malicious POST without ?confirmed=1 still bounces),
+  // but doing it client-side too gives the operator immediate, in-place
+  // feedback as they pick a target and tick boxes.
+  var targetSel = document.getElementById('target-agent');
+  var submitBtn = document.getElementById('move-submit');
+  var banner    = document.getElementById('collision-banner');
+  var countEl   = document.getElementById('collision-count');
+  var hostEl    = document.getElementById('collision-host');
+  var confirmCb = document.getElementById('collision-confirm');
+  var hiddenFlag = document.getElementById('confirmed-flag');
+  if (!targetSel || !submitBtn || !banner) return;
+
+  var hasTokenAttr = submitBtn.hasAttribute('disabled');
+  // If the submit is server-disabled (no Keystone token), keep it
+  // disabled regardless — the collision gate only stacks ON TOP.
+  var disabledBaseline = hasTokenAttr;
+
+  function currentTargetHost() {
+    var opt = targetSel.options[targetSel.selectedIndex];
+    return opt ? (opt.dataset.host || '') : '';
+  }
+
+  function collisionCount(host) {
+    if (!host) return 0;
+    var count = 0;
+    document.querySelectorAll('.network-check:checked').forEach(function (cb) {
+      var others = (cb.dataset.otherHosts || '').split(',')
+        .map(function (s) { return s.trim(); })
+        .filter(Boolean);
+      if (others.indexOf(host) !== -1) count++;
+    });
+    return count;
+  }
+
+  function recompute() {
+    var host = currentTargetHost();
+    var n = collisionCount(host);
+    if (n > 0) {
+      countEl.textContent = String(n);
+      hostEl.textContent = host;
+      banner.classList.remove('hidden');
+      hiddenFlag.value = confirmCb.checked ? '1' : '0';
+      submitBtn.disabled = disabledBaseline || !confirmCb.checked;
+    } else {
+      banner.classList.add('hidden');
+      hiddenFlag.value = '0';
+      confirmCb.checked = false;
+      submitBtn.disabled = disabledBaseline;
+    }
+  }
+  window.__dhcpRecomputeCollisions = recompute;
+
+  targetSel.addEventListener('change', recompute);
+  document.querySelectorAll('.network-check').forEach(function (cb) {
+    cb.addEventListener('change', recompute);
+  });
+  if (confirmCb) {
+    confirmCb.addEventListener('change', function () {
+      hiddenFlag.value = confirmCb.checked ? '1' : '0';
+      submitBtn.disabled = disabledBaseline ||
+        (collisionCount(currentTargetHost()) > 0 && !confirmCb.checked);
+    });
+  }
+  recompute();
 })();
 </script>
 {% endblock %}

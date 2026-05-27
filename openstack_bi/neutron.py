@@ -215,6 +215,94 @@ def networks_on_dhcp_agent(
     return out
 
 
+def dhcp_bindings_index(
+    region: Region,
+) -> Dict[str, List[Dict[str, str]]]:
+    """Every DHCP binding in `region`, grouped by `network_id`.
+
+    One bulk query; callers iterate per-network. Used both by the
+    move-page enrichment (which needs to know where a network's
+    *other* bindings live) and by the redundancy report (which
+    classifies networks by how their bindings spread across hosts).
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT nb.network_id, a.id AS agent_id, a.host
+        FROM networkdhcpagentbindings nb
+        JOIN agents a ON a.id = nb.dhcp_agent_id
+        WHERE a.agent_type = %s
+        ORDER BY a.host
+        """,
+        (DHCP_AGENT_TYPE,),
+    )
+    out: Dict[str, List[Dict[str, str]]] = {}
+    for r in rows:
+        out.setdefault(r["network_id"], []).append({
+            "agent_id": r["agent_id"],
+            "host": r.get("host") or "",
+        })
+    return out
+
+
+def dhcp_redundancy(region: Region) -> List[Dict[str, Any]]:
+    """Per-network DHCP-binding classification in `region`.
+
+    Returns rows shaped:
+
+        {id, name, project_id, hosts: [host,...], status}
+
+    where `status` is one of:
+
+        * `colocated` — 2+ bindings, all on the same physical host;
+          the network *thinks* it has DHCP redundancy but in reality
+          loses DHCP entirely if that one host goes down.
+        * `single`    — exactly one binding; no redundancy by design.
+        * `redundant` — 2+ bindings spread across distinct hosts.
+
+    Sorted with colocated first (the operationally interesting case),
+    then single, then redundant — so the audit page surfaces the bug
+    states up top without forcing the operator to scroll.
+    """
+    rows = query(
+        region, neutron_db(),
+        """
+        SELECT n.id, n.name, n.project_id, a.host
+        FROM networkdhcpagentbindings nb
+        JOIN agents a ON a.id = nb.dhcp_agent_id
+        JOIN networks n ON n.id = nb.network_id
+        WHERE a.agent_type = %s
+        ORDER BY n.name, a.host
+        """,
+        (DHCP_AGENT_TYPE,),
+    )
+    by_net: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        info = by_net.setdefault(r["id"], {
+            "id": r["id"],
+            "name": r.get("name") or "(unnamed)",
+            "project_id": r.get("project_id") or "",
+            "hosts": [],
+        })
+        info["hosts"].append(r.get("host") or "")
+
+    def _status(hosts: List[str]) -> str:
+        if len(hosts) >= 2 and len(set(hosts)) == 1:
+            return "colocated"
+        if len(hosts) == 1:
+            return "single"
+        return "redundant"
+
+    out: List[Dict[str, Any]] = []
+    for info in by_net.values():
+        info["status"] = _status(info["hosts"])
+        out.append(info)
+
+    severity = {"colocated": 0, "single": 1, "redundant": 2}
+    out.sort(key=lambda x: (severity[x["status"]], x["name"]))
+    return out
+
+
 def router_wan_ips(
     region: Region, router_ids: List[str]
 ) -> Dict[str, Dict[str, Any]]:

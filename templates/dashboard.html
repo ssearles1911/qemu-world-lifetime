@@ -1,0 +1,301 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — OpenStack Ops BI{% endblock %}
+
+{% block head_extra %}
+  <script src="{{ url_for('static', filename='chart.min.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<header class="mb-6 flex flex-wrap items-end justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Cloud health</h1>
+    <p class="text-sm text-gray-500">
+      Last updated <span id="as-of-label">{{ as_of }}</span> ·
+      MariaDB replicas + local trend history
+    </p>
+  </div>
+  <div class="flex items-center gap-3">
+    <button type="button" id="refresh-btn" class="btn btn-outline" title="Refresh now">⟳</button>
+    {% set range_chips = [('7d','7d'),('30d','30d'),('90d','90d'),('1y','1y')] %}
+    <div class="region-segmented" role="group" aria-label="Range">
+      {% for value, label in range_chips %}
+        <a href="{{ url_for('dashboard', region=region_filter, range=value) }}"
+           class="seg {% if range == value %}active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+</header>
+
+<div class="region-segmented mb-6" role="group" aria-label="Region">
+  <a href="{{ url_for('dashboard', region='all', range=range) }}"
+     class="seg {% if region_filter == 'all' %}active{% endif %}">All regions</a>
+  {% for r in regions %}
+    <a href="{{ url_for('dashboard', region=r.name, range=range) }}"
+       class="seg {% if region_filter == r.name %}active{% endif %}">{{ r.name }}</a>
+  {% endfor %}
+</div>
+
+{% if region_errors %}
+  <div class="px-4 py-2 rounded text-sm bg-amber-50 text-amber-800 border border-amber-200 mb-4">
+    <strong>Region errors:</strong>
+    <ul class="list-disc list-inside">
+      {% for e in region_errors %}
+        <li><span class="font-mono">{{ e.region }}</span> — {{ e.error }}</li>
+      {% endfor %}
+    </ul>
+    Counts may be incomplete; showing the most recent collector snapshot
+    where the live read failed.
+  </div>
+{% endif %}
+
+{# --- Zone A · Anomalies ---------------------------------------------------- #}
+<section class="dashboard-zone mb-6">
+  {% if anomalies %}
+    <div class="card card-body anomaly-banner">
+      <h2 class="text-base font-semibold mb-3 text-amber-800">
+        ⚠ {{ anomalies|length }} anomal{{ 'y' if anomalies|length == 1 else 'ies' }} require attention
+      </h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {% for a in anomalies %}
+          <div class="anomaly-tile anomaly-tile-{{ a.severity }}">
+            <div class="stat-label">{{ a.label }}</div>
+            <div class="stat-value">{{ a.value }}</div>
+            {% if a.splits %}
+              <div class="text-xs text-gray-500 mt-1">
+                {% for name, n in a.splits %}{{ name }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}
+              </div>
+            {% endif %}
+            {% if a.related_report %}
+              <a class="text-xs text-secondary hover:underline mt-1 inline-block"
+                 href="{{ url_for('run_report', report_id=a.related_report) }}">
+                → View report
+              </a>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% else %}
+    <div class="card card-body anomaly-ok">
+      <p class="text-sm">
+        <span class="text-green-700 font-medium">✓ No anomalies.</span>
+        Instances, ports, volumes, snapshots, and routers are all in
+        steady state across the cloud.
+      </p>
+    </div>
+  {% endif %}
+</section>
+
+{# --- Zone B · Cloud-wide totals ------------------------------------------- #}
+<section class="dashboard-zone mb-6">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    {% if region_filter == 'all' %}Cloud-wide totals{% else %}Totals — {{ region_filter }}{% endif %}
+  </h2>
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+    {% for t in tiles %}
+      <div class="metric-tile card card-body">
+        <div class="flex items-center justify-between">
+          <span class="stat-label">{{ t.label }}</span>
+          {% if t.related_report %}
+            <a class="text-xs text-secondary hover:underline"
+               href="{{ url_for('run_report', report_id=t.related_report) }}">→</a>
+          {% endif %}
+        </div>
+        <div class="stat-value tabular-nums">{{ "{:,}".format(t.value) }}</div>
+        <div class="metric-delta">
+          {% if t.delta is none %}
+            <span class="text-gray-400">no prior snapshot</span>
+          {% elif t.delta > 0 %}
+            +{{ "{:,}".format(t.delta) }} vs yesterday
+          {% elif t.delta < 0 %}
+            <span class="text-amber-700">{{ "{:,}".format(t.delta) }} vs yesterday</span>
+          {% else %}
+            ±0 vs yesterday
+          {% endif %}
+        </div>
+        <div class="metric-sparkline-wrap">
+          <canvas id="sparkline-{{ t.metric }}" class="metric-sparkline"></canvas>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+{# --- Zone C · Daily autobackups ------------------------------------------- #}
+<section class="dashboard-zone mb-6">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Daily autobackups
+  </h2>
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+    <div class="metric-tile card card-body">
+      <div class="stat-label">Cloud-wide today</div>
+      <div class="stat-value tabular-nums">{{ "{:,}".format(backups.today_combined) }}</div>
+      <div class="metric-sparkline-wrap">
+        <canvas id="sparkline-snapshots_autobackup_today" class="metric-sparkline"></canvas>
+      </div>
+    </div>
+    {% for region_name, value in backups.per_region.items() %}
+      <div class="metric-tile card card-body">
+        <div class="stat-label">{{ region_name }}</div>
+        <div class="stat-value tabular-nums">{{ "{:,}".format(value) }}</div>
+        <div class="metric-delta">
+          <a class="text-xs text-secondary hover:underline"
+             href="{{ url_for('dashboard_backups_csv', region=region_name) }}">
+            → Download CSV
+          </a>
+        </div>
+      </div>
+    {% endfor %}
+    <div class="metric-tile card card-body adherence-tile">
+      <div class="stat-label">30-day adherence</div>
+      <div class="adherence-strip" aria-label="Last 30 days of autobackup runs">
+        {% for cell in backups.adherence %}
+          <span class="adh adh-{{ cell.state }}"
+                title="{{ cell.date }} — {{ cell.value }} snapshot(s)"></span>
+        {% endfor %}
+      </div>
+      <div class="metric-delta">
+        {{ backups.ok_days }} / {{ backups.total_days }} days OK
+        {% if backups.last_missed %}
+          · last missed {{ backups.last_missed }}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
+
+{# --- Zone D · Trends ------------------------------------------------------ #}
+<section class="dashboard-zone mb-6">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Trends ({{ range }})
+  </h2>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+    <div class="card card-body">
+      <h3 class="text-sm font-semibold mb-2">{{ charts.compute.title }}</h3>
+      <canvas id="chart-compute" class="dashboard-chart"></canvas>
+    </div>
+    <div class="card card-body">
+      <h3 class="text-sm font-semibold mb-2">{{ charts.network.title }}</h3>
+      <canvas id="chart-network" class="dashboard-chart"></canvas>
+    </div>
+    <div class="card card-body">
+      <h3 class="text-sm font-semibold mb-2">{{ charts.storage.title }}</h3>
+      <canvas id="chart-storage" class="dashboard-chart"></canvas>
+    </div>
+    <div class="card card-body">
+      <h3 class="text-sm font-semibold mb-2">{{ charts.backup.title }}</h3>
+      <canvas id="chart-backup" class="dashboard-chart"></canvas>
+    </div>
+  </div>
+</section>
+
+{# --- Zone E · Per-region breakdown (combined view only) ------------------- #}
+{% if region_filter == 'all' and per_region_rows %}
+<section class="dashboard-zone mb-6">
+  <h2 class="text-sm uppercase tracking-wide text-gray-500 mb-3">
+    Per-region breakdown
+  </h2>
+  <div class="card"><div class="card-body">
+    <div class="overflow-x-auto">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Metric</th>
+          {% for r in regions %}
+            <th class="text-right">{{ r.name }}</th>
+          {% endfor %}
+          <th class="text-right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in per_region_rows %}
+          <tr>
+            <td>{{ row.label }}</td>
+            {% for r in regions %}
+              <td class="text-right tabular-nums">
+                {{ "{:,}".format(row.per_region.get(r.name, 0)) }}
+              </td>
+            {% endfor %}
+            <td class="text-right tabular-nums font-semibold">
+              {{ "{:,}".format(row.total) }}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div></div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/chart-theme.js') }}"></script>
+<script>
+(function () {
+  var chartSpecs = [
+    Object.assign({}, {{ charts.compute | tojson }}, { id: 'chart-compute' }),
+    Object.assign({}, {{ charts.network | tojson }}, { id: 'chart-network' }),
+    Object.assign({}, {{ charts.storage | tojson }}, { id: 'chart-storage' }),
+    Object.assign({}, {{ charts.backup  | tojson }}, { id: 'chart-backup'  }),
+  ];
+  var sparklines = [];
+  {% for t in tiles %}
+    sparklines.push({ id: 'sparkline-{{ t.metric }}', data: {{ t.sparkline | tojson }} });
+  {% endfor %}
+  sparklines.push({
+    id: 'sparkline-snapshots_autobackup_today',
+    data: ({{ backups.adherence | tojson }}).map(function (c) { return c.value; })
+  });
+  window.OpsBiCharts.init(chartSpecs, sparklines);
+})();
+
+(function () {
+  // ⟳ refresh button — fetch /dashboard.json and update tiles + charts
+  // in place rather than full-page reloading.
+  var btn = document.getElementById('refresh-btn');
+  if (!btn) return;
+  var asOf = document.getElementById('as-of-label');
+  btn.addEventListener('click', function () {
+    btn.disabled = true;
+    btn.textContent = '…';
+    var url = {{ url_for('dashboard_json') | tojson }} +
+              '?fresh=1' +
+              '&region=' + encodeURIComponent({{ region_filter | tojson }}) +
+              '&range=' + encodeURIComponent({{ range | tojson }});
+    fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        // Tile values + deltas.
+        d.tiles.forEach(function (t) {
+          var valEl = document.querySelector('.metric-tile [data-metric-value="' + t.metric + '"]');
+          if (valEl) valEl.textContent = t.value.toLocaleString();
+        });
+        // Update charts and sparklines in place.
+        var chartSpecs = [
+          Object.assign({}, d.charts.compute, { id: 'chart-compute' }),
+          Object.assign({}, d.charts.network, { id: 'chart-network' }),
+          Object.assign({}, d.charts.storage, { id: 'chart-storage' }),
+          Object.assign({}, d.charts.backup,  { id: 'chart-backup'  }),
+        ];
+        var sparks = d.tiles.map(function (t) {
+          return { id: 'sparkline-' + t.metric, data: t.sparkline };
+        });
+        sparks.push({
+          id: 'sparkline-snapshots_autobackup_today',
+          data: d.backups.adherence.map(function (c) { return c.value; })
+        });
+        window.OpsBiCharts.update(chartSpecs, sparks);
+        if (asOf) asOf.textContent = d.as_of;
+      })
+      .catch(function () {
+        // Stale-but-useful: leave the page alone, just re-enable the button.
+      })
+      .then(function () {
+        btn.disabled = false;
+        btn.textContent = '⟳';
+      });
+  });
+})();
+</script>
+{% endblock %}

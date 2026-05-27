@@ -257,6 +257,94 @@ def test_routers_page_shows_rebalance_recommendation(client, monkeypatch):
     assert b"loaded" in r.data
 
 
+def test_dhcp_redundancy_page_renders(client, monkeypatch):
+    _login_keystone(client, with_token=False)
+    from openstack_bi import neutron
+    monkeypatch.setattr(neutron, "dhcp_redundancy", lambda region: [
+        {"id": "colo", "name": "co-net", "project_id": "p1",
+         "hosts": ["nrtr05", "nrtr05"], "status": "colocated"},
+        {"id": "ok", "name": "good-net", "project_id": "p2",
+         "hosts": ["nrtr05", "nrtr07"], "status": "redundant"},
+    ])
+    r = client.get("/tools/dhcp/redundancy")
+    assert r.status_code == 200
+    assert b"co-located" in r.data
+    assert b"good-net" in r.data
+    # Summary tiles count by status.
+    assert b"Co-located" in r.data
+
+
+def test_dhcp_move_refuses_collision_without_confirm(client, monkeypatch):
+    """Server-side warn-and-confirm gate: a target host that already
+    has another DHCP binding for one of the selected networks must
+    bounce when the form did not include confirmed=1."""
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    monkeypatch.setattr(neutron, "list_dhcp_agents", lambda region: [
+        {"id": "src", "host": "nrtr09", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 1, "alive": True,
+         "network_count": 0},
+        {"id": "dst", "host": "nrtr05", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 1, "alive": True,
+         "network_count": 0},
+    ])
+    monkeypatch.setattr(neutron, "dhcp_bindings_index", lambda region: {
+        "n1": [
+            {"agent_id": "src", "host": "nrtr09"},
+            {"agent_id": "other", "host": "nrtr05"},
+        ],
+    })
+    called = []
+    monkeypatch.setattr(neutron, "move_network", lambda *a, **k: called.append(a))
+
+    r = client.post("/tools/dhcp/move", data={
+        "region": "dtw", "source_agent": "src", "target_agent": "dst",
+        "network_ids": ["n1"],
+        # confirmed deliberately omitted.
+    })
+    assert r.status_code == 302
+    assert called == []   # the move did NOT execute
+
+
+def test_dhcp_move_proceeds_with_confirm_flag(client, monkeypatch):
+    """The same collision scenario goes through when confirmed=1."""
+    _login_keystone(client)
+    from openstack_bi import neutron
+    from openstack_bi.auth import token_store
+
+    monkeypatch.setattr(token_store, "session_for", lambda key: MagicMock())
+    monkeypatch.setattr(neutron, "list_dhcp_agents", lambda region: [
+        {"id": "src", "host": "nrtr09", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 1, "alive": True,
+         "network_count": 0},
+        {"id": "dst", "host": "nrtr05", "admin_state_up": True,
+         "availability_zone": "z", "heartbeat_age": 1, "alive": True,
+         "network_count": 0},
+    ])
+    monkeypatch.setattr(neutron, "dhcp_bindings_index", lambda region: {
+        "n1": [
+            {"agent_id": "src", "host": "nrtr09"},
+            {"agent_id": "other", "host": "nrtr05"},
+        ],
+    })
+    called = []
+    monkeypatch.setattr(
+        neutron, "move_network",
+        lambda sess, region, nid, src, dst: called.append((region, nid, src, dst)),
+    )
+
+    r = client.post("/tools/dhcp/move", data={
+        "region": "dtw", "source_agent": "src", "target_agent": "dst",
+        "network_ids": ["n1"],
+        "confirmed": "1",
+    })
+    assert r.status_code == 302
+    assert called == [("dtw", "n1", "src", "dst")]
+
+
 def test_dhcp_move_calls_neutron_for_each_network(client, monkeypatch):
     _login_keystone(client)
     from openstack_bi import neutron

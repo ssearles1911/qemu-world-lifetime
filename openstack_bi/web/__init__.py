@@ -124,7 +124,7 @@ def create_app() -> Flask:
 
     from . import (
         auth_routes, setup_routes, admin_routes, instance_routes,
-        tools_routes, routes,
+        tools_routes, dashboard_routes, routes,
     )
 
     auth_routes.register(app)
@@ -132,6 +132,7 @@ def create_app() -> Flask:
     admin_routes.register(app)
     instance_routes.register(app)
     tools_routes.register(app)
+    dashboard_routes.register(app)
     routes.register(app)
     return app
 
