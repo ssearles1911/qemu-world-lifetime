@@ -3,11 +3,17 @@
 
 Real app lives in `openstack_bi.web`. This file exists so
 `waitress-serve web:app` and `python web.py` keep working.
+
+Starting the in-process dashboard scheduler here (instead of inside
+`create_app()`) keeps `create_app()` pure for tests and the CLI — only
+processes that boot through this entry shim get the daemon thread.
 """
 
+from openstack_bi import scheduler
 from openstack_bi.web import create_app
 
 app = create_app()
+scheduler.start()
 
 
 if __name__ == "__main__":

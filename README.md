@@ -31,15 +31,24 @@ for the whole cloud. Five zones top-to-bottom:
 5. **Per-region breakdown** — DTW vs CVG vs Total for every
    per-region metric, with a sparkline column.
 
-Data layer: a daily collector (`opsbi snapshot-metrics`, designed for
-cron at 02:00 UTC) reads counts off the regional MariaDB replicas and
-writes them into `dashboard_metric_history` — long-format, one row
-per `(snapshot_date, region, metric)`. The dashboard page reads
-exclusively from that SQLite table so loads stay sub-second; the **⟳
-Refresh** button explicitly runs a fresh collector pass when the
-operator wants newer data than the last cron tick. Region toggle is
-a segmented control (`All` / DTW / CVG); range chips are 7d / 30d /
-90d / 1y.
+Data layer: an in-process daemon thread runs the collector **every 15
+minutes** (overridable via `OPSBI_COLLECTOR_INTERVAL_MINUTES`). It
+reads counts off the regional MariaDB replicas and writes them into
+`dashboard_metric_history` — long-format, one row per
+`(snapshot_date, region, metric)`. Each 15-minute pass overwrites
+today's row with the latest reading via `INSERT OR REPLACE`, so the
+trend layer stays daily-granular while the dashboard's "current"
+tiles stay near-live. The collector also fires once at app boot so a
+fresh deploy is not blank for one full interval. The **⟳ Refresh**
+button on the dashboard re-runs the collector on demand. `opsbi
+snapshot-metrics` remains available for manual / ad-hoc runs. The
+dashboard page reads exclusively from the SQLite history table, so
+page loads stay sub-second.
+
+Set `OPSBI_DISABLE_SCHEDULER=1` if you'd rather drive the collector
+from an external scheduler (cron, systemd timer, etc.). Region toggle
+is a segmented control (`All` / DTW / CVG); range chips are 7d /
+30d / 90d / 1y.
 
 Add a metric: one row in `openstack_bi/dashboard_metrics.METRIC_DEFS`.
 No migrations.

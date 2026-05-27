@@ -522,8 +522,9 @@
 {% if result and result.charts %}
 <script src="{{ url_for('static', filename='js/chart-theme.js') }}"></script>
 <script>
-  // Tag each ChartSpec with the canvas id the loop above rendered
-  // (`chart-{{ loop.index0 }}`), then hand them to the shared init.
+  // Tag each ChartSpec with the canvas id the chart-render loop above
+  // produced (id="chart-N" where N is the chart's loop index), then
+  // hand them off to the shared init.
   (function () {
     var specs = ({{ charts_json | safe }}).map(function (s, i) {
       return Object.assign({}, s, { id: 'chart-' + i });
