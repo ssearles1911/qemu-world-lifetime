@@ -13,6 +13,37 @@ architecture so new reports plug in without touching the CLI or web UI:
   setup wizard, and admin pages. Charts render in-browser via Chart.js and
   are embedded as PNGs in the Excel export.
 
+## Cloud health dashboard
+
+`/dashboard` is the new landing page and the at-a-glance status surface
+for the whole cloud. Five zones top-to-bottom:
+
+1. **Anomalies** — counters that should be zero (instances/ports/
+   volumes/snapshots/routers in `ERROR`, ports in `BUILD`, missed
+   autobackup runs). Hidden behind a single ✓ banner when everything
+   is clean — no wall of green tiles.
+2. **Cloud-wide totals** — 9 tiles with the headline numbers, a
+   `±N vs yesterday` delta, and a per-tile trend sparkline.
+3. **Daily autobackups** — today's count cloud-wide and per region,
+   plus a 30-day adherence strip so a missed run is obvious.
+4. **Trends** — four Chart.js charts: compute footprint, network
+   port states, storage growth, daily autobackup runs.
+5. **Per-region breakdown** — DTW vs CVG vs Total for every
+   per-region metric, with a sparkline column.
+
+Data layer: a daily collector (`opsbi snapshot-metrics`, designed for
+cron at 02:00 UTC) reads counts off the regional MariaDB replicas and
+writes them into `dashboard_metric_history` — long-format, one row
+per `(snapshot_date, region, metric)`. The dashboard page reads
+exclusively from that SQLite table so loads stay sub-second; the **⟳
+Refresh** button explicitly runs a fresh collector pass when the
+operator wants newer data than the last cron tick. Region toggle is
+a segmented control (`All` / DTW / CVG); range chips are 7d / 30d /
+90d / 1y.
+
+Add a metric: one row in `openstack_bi/dashboard_metrics.METRIC_DEFS`.
+No migrations.
+
 ## Reports
 
 | ID | Category | Purpose |

@@ -176,6 +176,16 @@ def _handle_top_level(name: str) -> int:
                 print(f"  {err['region']}: {err['error']}", file=sys.stderr)
             return 1
         return 0
+    if name == "snapshot-metrics":
+        from openstack_bi import dashboard_metrics
+        rows = dashboard_metrics.collect_snapshot()
+        dashboard_metrics.write_snapshot(rows)
+        per_region: Dict[str, int] = defaultdict(int)
+        for r in rows:
+            per_region[r["region"]] += 1
+        for region in sorted(per_region):
+            print(f"{region}: {per_region[region]} metric row(s)")
+        return 0
     raise AssertionError(f"unknown top-level command: {name}")
 
 
@@ -389,6 +399,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("list-domains", "List enabled Keystone domains."),
         ("list-cells", "List discovered Nova cell DBs per region."),
         ("list-aggregates", "List Nova host aggregates per region (with errors)."),
+        ("snapshot-metrics",
+         "Run the dashboard metric collector and write today's snapshot to the history table."),
     ]:
         sub.add_parser(name, help=desc, description=desc)
 
@@ -463,7 +475,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command in (
-            "init", "list-regions", "list-domains", "list-cells", "list-aggregates",
+            "init", "list-regions", "list-domains", "list-cells",
+            "list-aggregates", "snapshot-metrics",
         ):
             return _handle_top_level(args.command)
         if args.command == "admin":

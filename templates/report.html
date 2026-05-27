@@ -520,98 +520,16 @@
 </script>
 {% endif %}
 {% if result and result.charts %}
+<script src="{{ url_for('static', filename='js/chart-theme.js') }}"></script>
 <script>
-(function(){
-  var PALETTES = {
-    light: {
-      color: '#1f2937',
-      grid: 'rgba(0,0,0,0.08)',
-      border: 'rgba(0,0,0,0.15)',
-      series: ['#1E3A5F', '#4A90A4', '#0e7490', '#b45309', '#7c3aed', '#15803d', '#be123c', '#0369a1']
-    },
-    dark: {
-      color: '#e5e7eb',
-      grid: 'rgba(255,255,255,0.08)',
-      border: 'rgba(255,255,255,0.15)',
-      series: ['#22d3ee', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#60a5fa', '#f472b6', '#2dd4bf']
-    }
-  };
-
-  function currentTheme() {
-    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-  }
-
-  function applyDefaults(theme) {
-    if (typeof Chart === 'undefined') return;
-    var p = PALETTES[theme];
-    Chart.defaults.color = p.color;
-    Chart.defaults.borderColor = p.border;
-  }
-
-  function paintInstance(chart, theme) {
-    var p = PALETTES[theme];
-    (chart.data.datasets || []).forEach(function (ds, i) {
-      var c = p.series[i % p.series.length];
-      ds.backgroundColor = c;
-      ds.borderColor = c;
+  // Tag each ChartSpec with the canvas id the loop above rendered
+  // (`chart-{{ loop.index0 }}`), then hand them to the shared init.
+  (function () {
+    var specs = ({{ charts_json | safe }}).map(function (s, i) {
+      return Object.assign({}, s, { id: 'chart-' + i });
     });
-    if (chart.options) {
-      chart.options.scales = chart.options.scales || {};
-      ['x', 'y'].forEach(function (axis) {
-        chart.options.scales[axis] = chart.options.scales[axis] || {};
-        chart.options.scales[axis].ticks = Object.assign({}, chart.options.scales[axis].ticks || {}, {color: p.color});
-        chart.options.scales[axis].grid = Object.assign({}, chart.options.scales[axis].grid || {}, {color: p.grid});
-        chart.options.scales[axis].title = Object.assign({}, chart.options.scales[axis].title || {}, {color: p.color});
-      });
-      chart.options.plugins = chart.options.plugins || {};
-      chart.options.plugins.title = Object.assign({}, chart.options.plugins.title || {}, {color: p.color});
-      chart.options.plugins.legend = chart.options.plugins.legend || {};
-      chart.options.plugins.legend.labels = Object.assign({}, chart.options.plugins.legend.labels || {}, {color: p.color});
-    }
-  }
-
-  var instances = [];
-  var theme = currentTheme();
-  applyDefaults(theme);
-
-  var charts = {{ charts_json | safe }};
-  charts.forEach(function (spec, idx) {
-    var el = document.getElementById('chart-' + idx);
-    if (!el) return;
-    var type = spec.kind === 'line' ? 'line' : 'bar';
-    var datasets = spec.series.map(function (s) { return { label: s.label, data: s.data }; });
-    var cfg = {
-      type: type,
-      data: { labels: spec.x_categories, datasets: datasets },
-      options: {
-        plugins: { title: { display: !!spec.title, text: spec.title } },
-        scales: {
-          x: { stacked: spec.kind === 'stacked_bar',
-               title: { display: !!spec.x_label, text: spec.x_label } },
-          y: { stacked: spec.kind === 'stacked_bar', beginAtZero: true,
-               title: { display: !!spec.y_label, text: spec.y_label } }
-        }
-      }
-    };
-    var chart = new Chart(el, cfg);
-    paintInstance(chart, theme);
-    chart.update('none');
-    instances.push(chart);
-  });
-
-  // Re-color charts when the theme changes mid-session.
-  // MutationObserver fires regardless of whether localStorage was the
-  // trigger; storage events would not fire in the same tab.
-  var observer = new MutationObserver(function () {
-    var t = currentTheme();
-    applyDefaults(t);
-    instances.forEach(function (c) {
-      paintInstance(c, t);
-      c.update('none');
-    });
-  });
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-})();
+    window.OpsBiCharts.init(specs, []);
+  })();
 </script>
 {% endif %}
 {% endblock %}
